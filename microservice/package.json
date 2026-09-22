@@ -1,0 +1,18 @@
+{
+  "name": "microservice",
+  "version": "1.0.0",
+  "description": "Local HAFAS radar subprocess for BahnOpticon",
+  "main": "hafas_radar.js",
+  "scripts": {
+    "radar": "node hafas_radar.js",
+    "test": "node --test *.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "hafas-client": "^6.3.6",
+    "oebb-hafas": "^5.0.0"
+  }
+}

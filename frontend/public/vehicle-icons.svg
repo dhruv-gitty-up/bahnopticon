@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="48" viewBox="0 0 144 48">
+  <g fill="white">
+    <!-- Rail vehicle, used for S-Bahn, U-Bahn, and regional services. -->
+    <path fill-rule="evenodd" d="M16 5h16a6 6 0 0 1 6 6v22a6 6 0 0 1-6 6l5 5h-6l-4-5h-6l-4 5h-6l5-5a6 6 0 0 1-6-6V11a6 6 0 0 1 6-6zm0 7v12h16V12H16zm2 16a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm12 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/>
+    <!-- Bus with wide windscreen and two wheels. -->
+    <path fill-rule="evenodd" d="M61 7h22a7 7 0 0 1 7 7v23h-4v5h-6v-5H64v5h-6v-5h-4V14a7 7 0 0 1 7-7zm0 7v12h22V14H61zm0 17a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm22 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/>
+    <!-- Tram with pantograph, windows, and rail wheels. -->
+    <path fill-rule="evenodd" d="M112 4h16l-5 5h9a6 6 0 0 1 6 6v20a5 5 0 0 1-5 5h-2l3 4h-5l-3-4h-12l-3 4h-5l3-4h-2a5 5 0 0 1-5-5V15a6 6 0 0 1 6-6h9l-5-5zm-4 11v12h24V15h-24zm4 16a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zm16 0a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/>
+  </g>
+</svg>

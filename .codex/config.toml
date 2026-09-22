@@ -1,0 +1,28 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+[mcp_servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+enabled = true
+
+[mcp_servers.sequential-thinking.env]
+npm_config_cache = ".mcp-cache/npm"
+
+[mcp_servers.postgres]
+command = "bash"
+args = ["scripts/run_postgres_mcp.sh"]
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+default_tools_approval_mode = "prompt"
+enabled = true
+
+[mcp_servers.fetch]
+# @modelcontextprotocol/server-fetch is not published on npm. This is the
+# official fetch server launcher from modelcontextprotocol/servers.
+command = "uvx"
+args = ["--with", "mcp<2", "mcp-server-fetch"]
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+enabled = true
