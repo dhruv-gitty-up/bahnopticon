@@ -4,7 +4,7 @@
 # .env, so shell syntax or command substitutions in that file are never run.
 load_mcp_env() {
   local env_file="${1:?env file is required}"
-  local raw line value
+  local raw line name value
 
   [[ -f "$env_file" ]] || return 0
   while IFS= read -r raw || [[ -n "$raw" ]]; do
@@ -12,8 +12,9 @@ load_mcp_env() {
     [[ "$line" =~ ^[[:space:]]*$ ]] && continue
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
-    if [[ "$line" =~ ^[[:space:]]*DATABASE_URL[[:space:]]*=(.*)$ ]]; then
-      value="${BASH_REMATCH[1]}"
+    if [[ "$line" =~ ^[[:space:]]*(DATABASE_URL|SUPABASE_DB_URL|FLY_APP)[[:space:]]*=(.*)$ ]]; then
+      name="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
       value="${value#"${value%%[![:space:]]*}"}"
       value="${value%"${value##*[![:space:]]}"}"
       if [[ ${#value} -ge 2 ]]; then
@@ -23,7 +24,7 @@ load_mcp_env() {
           value="${value:1:${#value}-2}"
         fi
       fi
-      export DATABASE_URL="$value"
+      export "$name=$value"
     fi
   done < "$env_file"
 }

@@ -4,7 +4,7 @@ Codex reads project-scoped MCP configuration from [`.codex/config.toml`](../.cod
 
 ## Setup
 
-1. Install Node.js with `npx`, the Codex CLI, and [`uv`](https://docs.astral.sh/uv/) so `uvx` is available.
+1. Install Node.js with `npx`, the Codex CLI, [`uv`](https://docs.astral.sh/uv/) so `uvx` is available, and [`flyctl`](https://fly.io/docs/flyctl/install/).
 2. Copy `.env.example` to `.env` and replace `DATABASE_URL` with the local or remote PostGIS connection string. The `.env` file is ignored by Git. Prefer a dedicated database role with read-only access to the schemas the agents need.
 3. Run:
 
@@ -12,7 +12,7 @@ Codex reads project-scoped MCP configuration from [`.codex/config.toml`](../.cod
    scripts/setup_mcps.sh
    ```
 
-The script reads only `DATABASE_URL` from `.env` without executing the file. It validates both configuration files, performs MCP initialize and `tools/list` handshakes, and calls the PostgreSQL `query` tool with `PostGIS_Version()` to verify the database and extension. Start a new Codex session or restart the IDE extension after changing MCP configuration. In Codex, run `/mcp`; from a terminal, run `codex mcp list`.
+The script reads only `DATABASE_URL`, `SUPABASE_DB_URL`, and `FLY_APP` from `.env` without executing the file. It validates both configuration files, performs MCP initialize and `tools/list` handshakes (including Fly's native MCP server), and calls the PostgreSQL `query` tool with `PostGIS_Version()` to verify the database and extension. Start a new Codex session or restart the IDE extension after changing MCP configuration. In Codex, run `/mcp`; from a terminal, run `codex mcp list`.
 
 NPX downloads use the ignored `.mcp-cache/npm` directory, avoiding dependence on the permissions or contents of a developer's global npm cache.
 
@@ -61,9 +61,25 @@ Use PostgreSQL resources and the `query` tool to inspect existing schemas, types
 
 Use the `fetch` tool for authoritative HAFAS, GTFS-Realtime, Overpass, PostGIS, Deck.gl, and MCP documentation URLs. Ask it for a bounded page section, cite the fetched URL in design notes, and compare the documentation with the actual installed package version before changing code. Do not send database credentials, `.env` contents, private endpoints, or internal documents to fetched URLs.
 
+### Fly.io deployments
+
+The `fly` MCP entry runs Fly.io's native `flyctl mcp server`. Authenticate once with `flyctl auth login`, or provide `FLY_API_TOKEN` in the environment that starts Codex. Restart Codex after changing the MCP configuration, confirm the server appears in `/mcp`, and use its Fly tools to inspect applications, deployments, logs, and status. Deployment tools can change production resources, so agents should inspect the current app and configuration before invoking them.
+
+For the repository's standard backend deployment, agents can execute:
+
+```sh
+scripts/deploy_fly.sh
+```
+
+The script safely reads `DATABASE_URL`, `SUPABASE_DB_URL`, and optional `FLY_APP` from `.env` and `.env.local`. `DATABASE_URL` takes precedence when both database variables are set. When `fly.toml` does not exist, it runs `fly launch --no-deploy --region fra` against `backend/Dockerfile`, using `FLY_APP` as the application name when set and a generated name otherwise. It then sets the Fly secret `DATABASE_URL` and runs `fly deploy` with the repository root as the Docker build context so the image includes both the Python backend and Node HAFAS adapter. The secret value is never printed by the script. Once `fly.toml` exists, later agent runs skip launch and deploy the current checkout directly.
+
+Before running it autonomously, an agent should verify that tests pass, `SUPABASE_DB_URL` points to the intended database, `flyctl auth whoami` identifies the intended Fly account, and the checked-in `fly.toml` targets the intended app. The agent can then run the script through its command tool without opening an interactive terminal. A first launch may still require Fly to allocate an app name if `FLY_APP` is unset, so setting `FLY_APP` is recommended for unattended runs.
+
 ## Troubleshooting
 
 - `postgres` fails immediately: confirm `.env` exists, `DATABASE_URL` is not the example value, the database is reachable, and `CREATE EXTENSION postgis` has been applied.
 - `fetch` is unavailable: install `uv`/`uvx`, then rerun `scripts/setup_mcps.sh`.
 - `npx` stalls on first use: allow registry access and rerun; the first launch downloads the package.
+- `fly` is unavailable: install a current `flyctl`, authenticate, rerun `scripts/setup_mcps.sh`, and restart Codex.
+- `scripts/deploy_fly.sh` stops before launch: set `SUPABASE_DB_URL` and authenticate with `flyctl auth login` or `FLY_API_TOKEN`.
 - Codex does not list the servers: trust the project, restart the local Codex client, and run `codex mcp list` or `/mcp`.

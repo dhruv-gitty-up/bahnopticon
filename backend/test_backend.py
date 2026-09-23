@@ -3,7 +3,6 @@ import asyncio
 from datetime import datetime
 import json
 from pathlib import Path
-import tempfile
 import threading
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -18,6 +17,35 @@ def movement(trip_id="trip-1", **updates):
               "nextStopovers": [{"arrivalDelay": None, "departureDelay": 120}]}
     result.update(updates)
     return result
+
+
+class CorsTests(unittest.IsolatedAsyncioTestCase):
+    async def preflight(self, origin):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://test"
+        ) as client:
+            return await client.options("/stream", headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "Last-Event-ID",
+            })
+
+    async def test_vercel_and_cloudflare_tunnel_origins_pass_preflight(self):
+        for origin in (
+            "https://bahnopticon.vercel.app",
+            "https://bahnopticon-git-preview-team.vercel.app",
+            "https://random-words.trycloudflare.com",
+        ):
+            with self.subTest(origin=origin):
+                response = await self.preflight(origin)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers["access-control-allow-origin"], origin)
+                self.assertEqual(response.headers["access-control-allow-credentials"], "true")
+                self.assertIn("GET", response.headers["access-control-allow-methods"])
+
+    async def test_untrusted_https_origin_is_not_allowed(self):
+        response = await self.preflight("https://example.com")
+        self.assertNotIn("access-control-allow-origin", response.headers)
 
 
 class NormalizationTests(unittest.TestCase):
@@ -241,19 +269,9 @@ class NormalizationTests(unittest.TestCase):
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        cache_directory = tempfile.TemporaryDirectory()
-        self.addCleanup(cache_directory.cleanup)
-        for name, filename in (
-            ("TRACKS_CACHE_FILE", "tracks.geojson"),
-            ("TRACKS_NATIONWIDE_CACHE_FILE", "tracks_nationwide.geojson"),
-            ("TRACKS_OVERPASS_CACHE_FILE", "tracks.overpass.json"),
-            ("STATIONS_CACHE_FILE", "stations.geojson"),
-        ):
-            patcher = patch.object(main, name, Path(cache_directory.name) / filename)
-            patcher.start()
-            self.addCleanup(patcher.stop)
         main.client_queues.clear()
         main.latest_payload = None
+        main.track_payload = None
         main.station_payload = None
         main.border_payload = None
         main.station_by_id = {}
@@ -333,10 +351,12 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
              patch.object(main, "OsmClient", return_value=osm), \
              patch.object(main, "StationClient", return_value=stations), \
              patch.object(main, "polling_loop", worker), \
-             patch.object(main, "load_map_data", worker):
+             patch.object(main, "load_map_data", worker), \
+             patch.dict(main.os.environ, {"DATABASE_URL": "postgresql://test"}):
             async with main.lifespan(main.app):
                 await asyncio.sleep(0)
             self.assertEqual(len(cancelled), 2)
+            osm.connect.assert_awaited_once()
             hafas.close.assert_awaited_once()
             osm.close.assert_awaited_once()
             stations.close.assert_awaited_once()
@@ -520,105 +540,42 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("is_mock", payload)
         self.assertEqual(payload["features"][0]["id"], "recovered")
 
-    async def test_track_loader_uses_smaller_fallback_when_nationwide_geometry_is_unusable(self):
+    async def test_track_loader_uses_postgis_collection_and_builds_graph(self):
+        collection = {"type": "FeatureCollection", "features": [{
+            "type": "Feature", "id": "osm:way:42",
+            "properties": {"product": "nationalExpress"},
+            "geometry": {"type": "LineString", "coordinates": [[8.0, 50.0], [8.1, 50.1]]},
+        }]}
         provider = AsyncMock()
-        provider.get_track_geometries.side_effect = [
-            {"elements": [{"type": "way", "geometry": []}]},
-            {"elements": [way([1, 2], [(13, 52), (13.001, 52)])]},
-        ]
-        with patch.object(main, "osm", provider), \
-             self.assertLogs("main", level="INFO") as logs:
+        provider.get_track_feature_collection.return_value = collection
+        with patch.object(main, "osm", provider), self.assertLogs("main", level="INFO") as logs:
             await asyncio.wait_for(main.load_tracks(), timeout=1)
-        self.assertEqual(provider.get_track_geometries.await_count, 2)
-        self.assertEqual(provider.get_track_geometries.await_args_list, [
-            unittest.mock.call(**main.BBOX, chunked=True, cache_quadrants=True),
-            unittest.mock.call(**main.TRACK_FALLBACK_BBOX, chunked=False,
-                               cache_quadrants=False),
-        ])
+        provider.get_track_feature_collection.assert_awaited_once_with()
         self.assertIsNotNone(main.engine._graph)
-        features = json.loads(main.engine.geometry_payload)["features"]
-        self.assertTrue(features)
-        self.assertTrue(all(feature["properties"].get("product") for feature in features))
-        self.assertTrue(any("Loaded 1 fallback railway track features" in line for line in logs.output))
+        response = await main.tracks()
+        self.assertEqual(json.loads(response.body)["features"][0]["id"], "osm:way:42")
+        self.assertTrue(any("Loaded 1 railway tracks from PostGIS" in line for line in logs.output))
 
-    async def test_track_loader_retries_after_primary_and_fallback_are_empty(self):
+    async def test_track_loader_retries_after_postgis_failure(self):
+        collection = {"type": "FeatureCollection", "features": [{
+            "type": "Feature", "id": "osm:way:42",
+            "properties": {"product": "nationalExpress"},
+            "geometry": {"type": "LineString", "coordinates": [[8.0, 50.0], [8.1, 50.1]]},
+        }]}
         provider = AsyncMock()
-        provider.get_track_geometries.side_effect = [
-            {}, {}, {"elements": [way([1, 2], [(13, 52), (13.001, 52)])]},
-        ]
+        provider.get_track_feature_collection.side_effect = [RuntimeError("database unavailable"), collection]
         with patch.object(main, "osm", provider), \
              patch.object(main.asyncio, "sleep", new_callable=AsyncMock) as sleep:
             await main.load_tracks()
-        self.assertEqual(provider.get_track_geometries.await_count, 3)
+        self.assertEqual(provider.get_track_feature_collection.await_count, 2)
         sleep.assert_awaited_once_with(60)
 
-    async def test_disk_caches_keep_tracks_and_stations_visible_during_overpass_outage(self):
-        rail = way([1, 2], [(13.4, 52.5), (13.401, 52.5)])
-        rail["tags"] = {"railway": "rail", "usage": "main"}
-        main.save_json_cache(main.TRACKS_OVERPASS_CACHE_FILE, {"elements": [rail]})
-        cached_stations = main.station_features_from_osm({"elements": [
-            {"type": "node", "id": 123, "lat": 52.52, "lon": 13.4,
-             "tags": {"railway": "station", "name": "Berlin Hbf"}},
-        ]}, **main.BBOX)
-        main.save_json_cache(main.STATIONS_CACHE_FILE, cached_stations)
-        provider = AsyncMock()
-        provider.get_track_geometries.return_value = {}  # Overpass 504 is normalized to this.
-        provider.get_station_nodes.return_value = {}
-        with patch.object(main, "osm", provider):
-            tasks = [asyncio.create_task(main.load_tracks()), asyncio.create_task(main.load_stations())]
-            try:
-                await asyncio.sleep(0.05)
-                self.assertEqual((await main.tracks()).status_code, 200)
-                self.assertEqual((await main.stations()).status_code, 200)
-                self.assertIsNotNone(main.engine._graph)
-                properties = json.loads((await main.stations()).body)["features"][0]["properties"]
-                self.assertIs(properties["is_important"], True)
-            finally:
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def test_geojson_only_track_cache_rebuilds_graph(self):
-        rail = way([1, 2], [(13.4, 52.5), (13.401, 52.5)])
-        rail["tags"] = {"railway": "rail", "usage": "main"}
-        original = InterpolationEngine()
-        self.assertTrue(original.load_osm_data({"elements": [rail]}))
-        main.save_json_cache(main.TRACKS_CACHE_FILE, original.geometry_payload)
-        provider = AsyncMock()
-        provider.get_track_geometries.return_value = {}
-        with patch.object(main, "osm", provider):
-            task = asyncio.create_task(main.load_tracks())
-            try:
-                await asyncio.sleep(0.05)
-                self.assertEqual((await main.tracks()).status_code, 200)
-                self.assertIsNotNone(main.engine._graph)
-                provider.get_track_geometries.assert_awaited_once_with(
-                    **main.BBOX, chunked=True, cache_quadrants=True,
-                )
-            finally:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-
-    async def test_nationwide_track_cache_serves_without_querying_overpass(self):
-        rail = way([1, 2], [(8.0, 50.0), (8.1, 50.1)])
-        rail["tags"] = {"railway": "rail", "usage": "main"}
-        original = InterpolationEngine()
-        self.assertTrue(original.load_osm_data({"elements": [rail]}))
-        main.save_json_cache(main.TRACKS_NATIONWIDE_CACHE_FILE, original.geometry_payload)
-        provider = AsyncMock()
-        with patch.object(main, "osm", provider):
-            await asyncio.wait_for(main.load_tracks(), timeout=1)
-        provider.get_track_geometries.assert_not_awaited()
-        response = await main.tracks()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(json.loads(response.body)["features"]), 1)
-
-    async def test_nationwide_tracks_are_served_while_graph_rebuilds(self):
-        rail = way([1, 2], [(8.0, 50.0), (8.1, 50.1)])
-        rail["tags"] = {"railway": "rail", "usage": "main"}
-        original = InterpolationEngine()
-        self.assertTrue(original.load_osm_data({"elements": [rail]}))
-        main.save_json_cache(main.TRACKS_NATIONWIDE_CACHE_FILE, original.geometry_payload)
+    async def test_tracks_are_served_while_graph_rebuilds(self):
+        collection = {"type": "FeatureCollection", "features": [{
+            "type": "Feature", "id": "osm:way:42",
+            "properties": {"product": "nationalExpress"},
+            "geometry": {"type": "LineString", "coordinates": [[8.0, 50.0], [8.1, 50.1]]},
+        }]}
         rebuilding = threading.Event()
         release = threading.Event()
         actual_load = main.engine.load_osm_data
@@ -627,6 +584,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             release.wait(2)
             return actual_load(osm_data)
         provider = AsyncMock()
+        provider.get_track_feature_collection.return_value = collection
         with patch.object(main, "osm", provider), \
              patch.object(main.engine, "load_osm_data", side_effect=delayed_load):
             task = asyncio.create_task(main.load_tracks())
@@ -638,20 +596,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 release.set()
                 await task
-        provider.get_track_geometries.assert_not_awaited()
-
-    async def test_successful_quadrants_write_nationwide_cache(self):
-        rail = way([1, 2], [(8.0, 50.0), (8.1, 50.1)])
-        rail["tags"] = {"railway": "rail", "usage": "main"}
-        provider = AsyncMock()
-        provider.get_track_geometries.return_value = {"elements": [rail]}
-        with patch.object(main, "osm", provider):
-            await asyncio.wait_for(main.load_tracks(), timeout=1)
-        provider.get_track_geometries.assert_awaited_once_with(
-            **main.BBOX, chunked=True, cache_quadrants=True,
-        )
-        collection = main.load_feature_cache(main.TRACKS_NATIONWIDE_CACHE_FILE)
-        self.assertEqual(len(collection["features"]), 1)
+        provider.get_track_feature_collection.assert_awaited_once_with()
 
     async def test_geometry_endpoint_serves_cached_linestrings(self):
         for endpoint in (main.tracks, main.geometry):
@@ -662,10 +607,11 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.status_code, 503)
             self.assertEqual(error.exception.detail, main.TRACKS_UNAVAILABLE_DETAIL)
             self.assertEqual(error.exception.headers, {"Retry-After": "60"})
-            self.assertIn("Overpass-backed in-memory cache is empty", logs.output[0])
+            self.assertIn("PostGIS-backed in-memory cache is empty", logs.output[0])
         rail = way([1, 2, 3], [(13.4, 52.5), (13.401, 52.5), (13.401, 52.501)])
         rail.update({"id": 42, "tags": {"railway": "rail", "name": "Berlin test track"}})
         self.assertTrue(main.engine.load_osm_data({"elements": [rail]}))
+        main.track_payload = main.engine.geometry_payload
         response = await main.geometry()
         self.assertEqual(response.media_type, "application/geo+json")
         collection = json.loads(response.body)
@@ -679,7 +625,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         alias = await main.tracks()
         self.assertEqual(alias.body, response.body)
 
-    async def test_tracks_http_response_explains_empty_overpass_cache(self):
+    async def test_tracks_http_response_explains_empty_postgis_cache(self):
         transport = httpx.ASGITransport(app=main.app)
         with self.assertLogs("main", level="ERROR"):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -718,22 +664,24 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             await main.stations()
         self.assertEqual(error.exception.status_code, 503)
         provider = AsyncMock()
-        provider.get_station_nodes.side_effect = [ValueError("outage"), {"elements": [{
-            "type": "node", "id": 123, "lat": 52.522605, "lon": 13.402359,
-            "tags": {"railway": "station", "name": "S Hackescher Markt", "station": "subway"},
-        }]}]
+        collection = {"type": "FeatureCollection", "features": [{
+            "type": "Feature", "id": "osm:node:123",
+            "properties": {"station_id": "osm:node:123", "name": "S Hackescher Markt",
+                           "is_important": False},
+            "geometry": {"type": "Point", "coordinates": [13.402359, 52.522605]},
+        }]}
+        provider.get_station_feature_collection.side_effect = [ValueError("outage"), collection]
         with patch.object(main, "osm", provider), \
              patch.object(main.asyncio, "sleep", new_callable=AsyncMock) as sleep:
             await main.load_stations()
-        self.assertEqual(provider.get_station_nodes.await_count, 2)
+        self.assertEqual(provider.get_station_feature_collection.await_count, 2)
         sleep.assert_awaited_once_with(60)
         response = await main.stations()
         collection = json.loads(response.body)
         self.assertEqual(collection["features"][0]["id"], "osm:node:123")
-        self.assertEqual(collection["features"][0]["properties"]["id"], 123)
-        self.assertEqual(collection["features"][0]["properties"]["station"], "subway")
+        self.assertEqual(collection["features"][0]["properties"]["station_id"], "osm:node:123")
         self.assertEqual((await main.stations()).body, response.body)
-        self.assertEqual(provider.get_station_nodes.await_count, 2)
+        self.assertEqual(provider.get_station_feature_collection.await_count, 2)
 
     async def test_departures_endpoint_validates_id_and_caches_ten_rows(self):
         provider = AsyncMock()

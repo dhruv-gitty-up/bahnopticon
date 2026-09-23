@@ -45,6 +45,7 @@ logs/
 .codex/logs/
 .codex/sessions/
 .codex/cache/
+supabase/.temp/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

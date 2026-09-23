@@ -18,13 +18,7 @@ from hafas_client import (
     TripSubprocessError, TripSubprocessTimeout,
 )
 from borders import get_cached_borders
-from osm_client import (
-    OsmClient, DEFAULT_OVERPASS_ENDPOINT, TRACK_FALLBACK_BBOX, TRACKS_CACHE_FILE,
-    TRACKS_OVERPASS_CACHE_FILE,
-    TRACKS_NATIONWIDE_CACHE_FILE, STATIONS_CACHE_FILE, load_feature_cache, load_json_cache,
-    mark_important_stations,
-    save_json_cache, station_features_from_osm, track_features_to_osm,
-)
+from osm_client import OsmClient, track_features_to_osm
 from station_client import StationClient
 from engine import InterpolationEngine
 
@@ -37,6 +31,7 @@ osm = None
 station_client = None
 engine = InterpolationEngine()
 latest_payload = None
+track_payload = None
 station_payload = None
 border_payload = None
 station_by_id = {}
@@ -52,132 +47,67 @@ VALID_PRODUCTS = {"nationalExpress", "national", "regional", "suburban"}
 DEPARTURE_CACHE_SECONDS = 15
 TRIP_CACHE_SECONDS = 300
 TRACKS_UNAVAILABLE_DETAIL = (
-    "Track geometry unavailable: the Overpass-backed in-memory cache is empty"
+    "Track geometry unavailable: the PostGIS-backed in-memory cache is empty"
 )
 # Rectangular sanity boundary covering Germany, Austria, and Switzerland.
 DACH_BOUNDS = {"north": 55.1, "south": 45.5, "west": 5.8, "east": 17.2}
 
 
 async def load_tracks():
-    """Load the complete disk cache first; query Overpass only if it is absent."""
-    nationwide_features = await asyncio.to_thread(load_feature_cache, TRACKS_NATIONWIDE_CACHE_FILE)
-    if nationwide_features:
-        try:
-            # Make /tracks available before the routing graph finishes rebuilding.
-            engine.geometry_payload = await asyncio.to_thread(
-                TRACKS_NATIONWIDE_CACHE_FILE.read_bytes,
-            )
-            nationwide_osm = await asyncio.to_thread(track_features_to_osm, nationwide_features)
-            if await asyncio.to_thread(engine.load_osm_data, nationwide_osm):
-                logger.info("Restored %d nationwide railway tracks from disk cache",
-                            len(nationwide_features["features"]))
-                return
-        except Exception:
-            logger.exception("Could not restore nationwide railway track cache")
-    cached_osm = await asyncio.to_thread(load_json_cache, TRACKS_OVERPASS_CACHE_FILE)
-    restored = False
-    if cached_osm:
-        try:
-            restored = await asyncio.to_thread(engine.load_osm_data, cached_osm)
-        except Exception:
-            logger.exception("Could not restore cached Overpass track graph")
-    if not restored:
-        cached_features = await asyncio.to_thread(load_feature_cache, TRACKS_CACHE_FILE)
-        if cached_features:
-            try:
-                cached_osm = await asyncio.to_thread(track_features_to_osm, cached_features)
-                restored = await asyncio.to_thread(engine.load_osm_data, cached_osm)
-            except Exception:
-                logger.exception("Could not restore cached GeoJSON track graph")
-    if restored:
-        logger.info("Restored railway track geometry from disk cache")
+    """Load tracks from PostGIS and rebuild the in-memory routing graph."""
+    global track_payload
     while True:
-        for label, bounds in (("nationwide", BBOX), ("fallback", TRACK_FALLBACK_BBOX)):
-            # Do not replace a working disk-restored graph with a smaller
-            # corridor merely because the nationwide refresh timed out.
-            if label == "fallback" and engine.geometry_payload:
-                break
-            try:
-                osm_data = await osm.get_track_geometries(
-                    **bounds, chunked=(label == "nationwide"),
-                    cache_quadrants=(label == "nationwide"),
-                )
-                if osm_data.get("elements") and await asyncio.to_thread(engine.load_osm_data, osm_data):
-                    feature_count = await asyncio.to_thread(
-                        lambda: len(json.loads(engine.geometry_payload)["features"])
-                    )
-                    logger.info(
-                        "Loaded %d %s railway track features from Overpass",
-                        feature_count,
-                        label,
-                    )
-                    try:
-                        if label == "nationwide":
-                            await asyncio.to_thread(
-                                save_json_cache, TRACKS_NATIONWIDE_CACHE_FILE,
-                                engine.geometry_payload,
-                            )
-                        await asyncio.to_thread(save_json_cache, TRACKS_OVERPASS_CACHE_FILE, osm_data)
-                        await asyncio.to_thread(save_json_cache, TRACKS_CACHE_FILE, engine.geometry_payload)
-                    except (OSError, ValueError):
-                        logger.exception("Could not save railway track disk cache")
-                    return
-                logger.warning(
-                    "Overpass returned no usable %s track geometry for bounds %s",
-                    label,
-                    bounds,
-                )
-            except Exception:
-                logger.exception("Could not load %s track geometries", label)
+        try:
+            collection = await osm.get_track_feature_collection()
+            if not collection["features"]:
+                raise ValueError("PostGIS tracks table is empty")
+            # Publish the database result before the CPU-heavy graph rebuild.
+            track_payload = await asyncio.to_thread(
+                lambda: json.dumps(collection, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            )
+            osm_data = await asyncio.to_thread(track_features_to_osm, collection)
+            if not await asyncio.to_thread(engine.load_osm_data, osm_data):
+                track_payload = None
+                raise ValueError("PostGIS track geometry could not build a routing graph")
+            logger.info("Loaded %d railway tracks from PostGIS", len(collection["features"]))
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Could not load track geometry from PostGIS")
         await asyncio.sleep(60)
 
 
 async def load_stations():
-    """Cache Overpass railway nodes without delaying startup or live polling."""
+    """Load station points from PostGIS into the response and lookup caches."""
     global station_payload, station_by_id
-    cached = await asyncio.to_thread(load_feature_cache, STATIONS_CACHE_FILE)
-    if cached:
+    while True:
         try:
-            collection = await asyncio.to_thread(mark_important_stations, cached)
+            collection = await osm.get_station_feature_collection()
+            if not collection["features"]:
+                raise ValueError("PostGIS stations table is empty")
             station_by_id = await asyncio.to_thread(
                 lambda: {feature["id"]: feature for feature in collection["features"]}
             )
             station_payload = await asyncio.to_thread(
                 lambda: json.dumps(collection, allow_nan=False, separators=(",", ":")).encode("utf-8")
             )
-            logger.info("Restored %d railway stations from disk cache", len(collection["features"]))
-        except (KeyError, TypeError, ValueError):
-            logger.exception("Could not restore cached stations")
-    while True:
-        try:
-            osm_data = await osm.get_station_nodes(**BBOX)
-            collection = await asyncio.to_thread(station_features_from_osm, osm_data, **BBOX)
-            if collection.get("features"):
-                payload = await asyncio.to_thread(
-                    lambda: json.dumps(collection, allow_nan=False, separators=(",", ":")).encode("utf-8")
-                )
-                station_by_id = await asyncio.to_thread(
-                    lambda: {feature["id"]: feature for feature in collection["features"]}
-                )
-                station_payload = payload
-                logger.info("Loaded %d railway station nodes from Overpass", len(collection["features"]))
-                try:
-                    await asyncio.to_thread(save_json_cache, STATIONS_CACHE_FILE, payload)
-                except (OSError, ValueError):
-                    logger.exception("Could not save station disk cache")
-                return
+            logger.info("Loaded %d railway stations from PostGIS", len(collection["features"]))
+            return
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            logger.exception("Could not load stations")
+            logger.exception("Could not load stations from PostGIS")
         await asyncio.sleep(60)
 
 
 async def load_map_data():
-    """Restore both disk caches while serialized Overpass requests refresh them."""
+    """Load database-backed map geometry and the independent border cache."""
     await asyncio.gather(load_tracks(), load_stations(), load_borders())
 
 
 async def load_borders():
-    """Keep a static national/state outline available independently of Overpass."""
+    """Keep a static national/state outline available independently of PostGIS."""
     global border_payload
     while True:
         try:
@@ -194,7 +124,7 @@ async def load_borders():
 
 @asynccontextmanager
 async def lifespan(app):
-    global hafas, osm, station_client, latest_payload, station_payload, border_payload, station_by_id
+    global hafas, osm, station_client, latest_payload, track_payload, station_payload, border_payload, station_by_id
     global last_success, upstream_status, engine
     hafas = HafasClient(
         os.getenv("HAFAS_BASE_URL", "https://v6.vbb.transport.rest"),
@@ -203,10 +133,15 @@ async def lifespan(app):
         )),
         os.getenv("NODE_BINARY", "node"),
     )
-    osm = OsmClient(os.getenv("OVERPASS_URL", DEFAULT_OVERPASS_ENDPOINT))
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL is required for Supabase PostGIS geometry")
+    osm = OsmClient(database_url=database_url)
+    await osm.connect()
     station_client = StationClient(os.getenv("HAFAS_BASE_URL", "https://v6.vbb.transport.rest"))
     engine = InterpolationEngine()
     latest_payload = None
+    track_payload = None
     station_payload = None
     border_payload = None
     station_by_id = {}
@@ -232,8 +167,12 @@ app.add_middleware(
     allow_origins=[origin.strip() for origin in os.getenv(
         "CORS_ORIGINS", "http://localhost:5173,http://localhost:5174"
     ).split(",") if origin.strip()],
+    allow_origin_regex=os.getenv(
+        "CORS_ORIGIN_REGEX",
+        r"(?i)^https://(?:[a-z0-9-]+\.)+(?:vercel\.app|trycloudflare\.com)$",
+    ),
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -562,11 +501,11 @@ async def health():
 
 @app.get("/geometry")
 async def geometry():
-    if not engine.geometry_payload:
+    if not track_payload:
         logger.error(TRACKS_UNAVAILABLE_DETAIL)
         raise HTTPException(status_code=503, detail=TRACKS_UNAVAILABLE_DETAIL,
                             headers={"Retry-After": "60"})
-    return Response(content=engine.geometry_payload, media_type="application/geo+json")
+    return Response(content=track_payload, media_type="application/geo+json")
 
 
 @app.get("/tracks")

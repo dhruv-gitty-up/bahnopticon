@@ -1,0 +1,17 @@
+.git
+.agents
+.codex
+.mcp-cache
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+backend/venv
+backend/.venv
+microservice/node_modules
+frontend
+data/*
+!data/borders_cache.geojson
+*.log

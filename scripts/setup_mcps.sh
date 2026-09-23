@@ -30,6 +30,7 @@ check_command npx 'NPX launcher found' || true
 check_command codex 'Codex CLI found' || true
 check_command python3 'Python available for config validation' || true
 check_command uvx 'Required by the official fetch MCP server' || true
+check_command flyctl 'Fly.io CLI and native MCP server' || true
 
 if command -v node >/dev/null 2>&1; then
   printf '     Node %s; NPX %s\n' "$(node --version)" "$(npx --version 2>/dev/null || echo unavailable)"
@@ -66,6 +67,13 @@ if command -v node >/dev/null 2>&1 && command -v uvx >/dev/null 2>&1; then
     || failures=$((failures + 1))
 else
   echo '[SKIP] fetch handshake (install uv/uvx first)'
+fi
+
+if command -v node >/dev/null 2>&1 && command -v flyctl >/dev/null 2>&1; then
+  node scripts/mcp_smoke_test.mjs fly flyctl mcp server \
+    || failures=$((failures + 1))
+else
+  echo '[SKIP] fly handshake (install flyctl first)'
 fi
 
 if command -v codex >/dev/null 2>&1; then

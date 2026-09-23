@@ -26,3 +26,13 @@ args = ["--with", "mcp<2", "mcp-server-fetch"]
 startup_timeout_sec = 60
 tool_timeout_sec = 120
 enabled = true
+
+[mcp_servers.fly]
+# Native command-scoped MCP server included with flyctl. Authentication comes
+# from `flyctl auth login` or FLY_API_TOKEN in the agent environment.
+command = "flyctl"
+args = ["mcp", "server"]
+startup_timeout_sec = 60
+tool_timeout_sec = 900
+default_tools_approval_mode = "prompt"
+enabled = true

@@ -1,4 +1,4 @@
-"""Snap vehicle observations to Overpass ways and route between them."""
+"""Snap vehicle observations to OSM-derived PostGIS ways and route between them."""
 
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -231,8 +231,9 @@ class InterpolationEngine:
         for coordinates, ids, railway, product in valid_ways:
             nodes = []
             for index, point in enumerate(coordinates):
-                # Real Overpass output has aligned OSM node IDs. Coordinate keys
-                # support hand-built fixtures when node IDs are absent.
+                # Raw OSM fixtures may include aligned node IDs. The current
+                # PostGIS schema stores LineStrings, so imported rows reconnect
+                # through identical coordinate keys instead.
                 node = ("osm", ids[index]) if ids is not None else ("coord", point)
                 nodes.append(node)
                 graph.add_node(node, coordinates=point)
@@ -276,14 +277,14 @@ class InterpolationEngine:
         return True
 
     def generate_mock_traffic(self, timestamp: Optional[float] = None) -> Dict:
-        """Advance 20 simulated vehicles by one connected OSM rail node.
+        """Advance 20 simulated vehicles by one connected rail node.
 
         Call this from a worker thread. Each segment is an actual edge in the
-        cached Overpass graph, so the emitted coordinates stay on physical rail.
+        PostGIS-derived graph, so emitted coordinates stay on physical rail.
         """
         graph = self._graph
         if graph is None:
-            raise RuntimeError("Overpass track geometry is not loaded yet")
+            raise RuntimeError("PostGIS track geometry is not loaded yet")
         timestamp = time.time() if timestamp is None else timestamp
         modes = (("nationalExpress", "rail", "ICE"),
                  ("national", "rail", "IC"),
@@ -299,7 +300,7 @@ class InterpolationEngine:
             available = [(product, railway, prefix) for product, railway, prefix in modes
                          if candidates[product]]
             if not available:
-                raise RuntimeError("Overpass graph has no usable long-distance or regional rail edges")
+                raise RuntimeError("PostGIS graph has no usable long-distance or regional rail edges")
             counts = {product: 0 for product, _, _ in available}
             self._mock_vehicles = []
             for index in range(20):
