@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TransitMap } from './TransitMap';
 import type { TrackProduct, TransitMapInteractions } from './TransitMap';
+import { AnalyticsSidebar } from './AnalyticsSidebar';
 import { StationDeparturePanel, TransitLegend, VehicleDetailsPanel, VehicleHoverTooltip } from './TransitPanels';
 import { findVehicleById } from './transit';
 import type { StationFeature } from './transit';
@@ -26,6 +27,7 @@ function App() {
   const [hideDelayed, setHideDelayed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedStation, setSelectedStation] = useState<StationFeature | null>(null);
+  const [selectedRegion, setSelectedRegion] = useState('');
   const [activePanel, setActivePanel] = useState<'vehicle' | 'station' | null>(null);
   const [mapInteractions, setMapInteractions] = useState<TransitMapInteractions>({
     hoveredVehicleId: null, clickedVehicleId: null, clickedStation: null,
@@ -33,6 +35,7 @@ function App() {
   // Resolve interaction identity from each SSE snapshot instead of retaining stale feature objects.
   const hoveredVehicle = findVehicleById(vehicles, mapInteractions.hoveredVehicleId);
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const tooltipFrameRef = useRef(0);
@@ -77,11 +80,13 @@ function App() {
   const onSelect = useCallback((vehicleId: string | null) => {
     setSelectedId(vehicleId);
     setActivePanel(vehicleId ? 'vehicle' : null);
+    setMobileMenuOpen(false);
   }, []);
   const onStationSelect = useCallback((station: StationFeature) => {
     setSelectedStation(station);
     setSelectedId(null);
     setActivePanel('station');
+    setMobileMenuOpen(false);
   }, []);
   const onInteractionChange = useCallback((next: TransitMapInteractions) => setMapInteractions(next), []);
   const closePanel = useCallback(() => {
@@ -122,6 +127,7 @@ function App() {
       <TransitMap
         vehicles={filteredVehicles}
         activeFilters={activeFilters}
+        selectedRegion={selectedRegion}
         selectedVehicleId={selectedId}
         onSelect={onSelect}
         onStationSelect={onStationSelect}
@@ -131,8 +137,30 @@ function App() {
       {hoveredVehicle && (
         <VehicleHoverTooltip vehicle={hoveredVehicle} tooltipRef={tooltipRef} />
       )}
-      <div className="dashboard-overlay">
-        <section className="island controls" aria-label="Transit controls">
+      <button
+        className="mobile-menu-button"
+        type="button"
+        aria-expanded={mobileMenuOpen}
+        aria-controls="transit-controls"
+        onClick={() => setMobileMenuOpen(open => !open)}
+      >
+        <span className="hamburger-icon" aria-hidden="true"><i /><i /><i /></span>
+        Explore
+      </button>
+      <div className={`dashboard-overlay${activePanel ? ' dashboard-overlay--panel-active' : ''}`}>
+        {mobileMenuOpen && (
+          <button
+            className="mobile-sheet-backdrop"
+            type="button"
+            aria-label="Close transit controls"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+        )}
+        <section
+          id="transit-controls"
+          className={`island controls${mobileMenuOpen ? ' controls--mobile-open' : ''}`}
+          aria-label="Transit controls"
+        >
           <div className="panel-heading">
             <h1>BahnOpticon</h1>
             <button
@@ -203,11 +231,17 @@ function App() {
           )}
         </section>
         {activePanel === 'vehicle' && selectedVehicle && (
-          <VehicleDetailsPanel vehicle={selectedVehicle} feedLive={status === 'connected'} onClose={closePanel} />
+          <VehicleDetailsPanel
+            key={selectedVehicle.id}
+            vehicle={selectedVehicle}
+            feedLive={status === 'connected'}
+            onClose={closePanel}
+          />
         )}
         {activePanel === 'station' && selectedStation && (
           <StationDeparturePanel key={selectedStation.id} station={selectedStation} onClose={closePanel} />
         )}
+        <AnalyticsSidebar selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} />
       </div>
       <TransitLegend />
     </main>

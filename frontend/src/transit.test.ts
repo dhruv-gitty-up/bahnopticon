@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseDepartures } from './departures.ts';
+import { parseSevenDayAnalytics } from './analytics.ts';
 import { createTimedTrip, findVehicleById, getSnapshotTimestamp, getVehiclePosition, measureRoute, parseBorderCollection, parseJourneyFeature, parseStationCollection, parseVehicleSnapshot, reconcileVehicleSlots, sampleRoute } from './transit.ts';
 import type { VehicleSlots } from './transit.ts';
 import { formatDateTime, formatTime } from './transitPresentation.ts';
@@ -38,6 +39,9 @@ test('retains stopover timing and full route metadata for vehicle selection', ()
     destination: 'Berlin Hauptbahnhof',
     scheduled_time: '2026-09-17T23:30:00+02:00',
     expected_time: '2026-09-17T23:31:00+02:00',
+    next_station_scheduled_time: '2026-09-17T23:30:00+02:00',
+    next_station_expected_time: '2026-09-17T23:31:00+02:00',
+    next_station_delay_minutes: 1,
   });
   const { properties } = snapshot(raw)[0];
   assert.equal(properties.route, 'M41 Hauptbahnhof via Sonnenallee');
@@ -45,6 +49,9 @@ test('retains stopover timing and full route metadata for vehicle selection', ()
   assert.equal(properties.destination, 'Berlin Hauptbahnhof');
   assert.equal(properties.scheduledTime, '2026-09-17T23:30:00+02:00');
   assert.equal(properties.expectedTime, '2026-09-17T23:31:00+02:00');
+  assert.equal(properties.nextStationScheduledTime, '2026-09-17T23:30:00+02:00');
+  assert.equal(properties.nextStationExpectedTime, '2026-09-17T23:31:00+02:00');
+  assert.equal(properties.nextStationDelay, 1);
 });
 
 test('renders offset-aware Berlin times on a 24-hour clock, including midnight', () => {
@@ -95,12 +102,41 @@ test('accepts selected journey geometry and rejects malformed routes', () => {
 });
 
 test('keeps national and state border levels for map styling', () => {
-  const border = (level: string) => ({ type: 'Feature', properties: { admin_level: level },
+  const border = (level: string) => ({ type: 'Feature', properties: { admin_level: level, name: 'Berlin' },
     geometry: { type: 'LineString', coordinates: [[8, 50], [9, 51]] } });
   const result = parseBorderCollection({ type: 'FeatureCollection', features: [
     border('2'), border('4'), border('6'), { ...border('2'), geometry: { type: 'Point', coordinates: [8, 50] } },
   ] });
   assert.deepEqual(result.features.map(feature => feature.properties.admin_level), ['2', '4']);
+  assert.deepEqual(result.features.map(feature => feature.properties.name), ['Berlin', 'Berlin']);
+});
+
+test('reconstructs closed border lines as fillable polygons for region highlighting', () => {
+  const result = parseBorderCollection({ type: 'FeatureCollection', features: [{
+    type: 'Feature', properties: { admin_level: '4', name: 'Bayern' },
+    geometry: { type: 'MultiLineString', coordinates: [
+      [[10, 48], [11, 48], [11, 49], [10, 48]],
+    ] },
+  }] });
+  assert.equal(result.features[0].geometry.type, 'MultiPolygon');
+  assert.equal(result.features[0].properties.name, 'Bayern');
+});
+
+test('normalizes the seven-day analytics dashboard contract', () => {
+  const analytics = parseSevenDayAnalytics({
+    period_days: 7, is_mock: true,
+    network_performance: [
+      { product: 'regional', label: 'Regional', on_time_probability: 0.78,
+        average_delay_minutes: 7.2 },
+    ],
+    regional_performance: [
+      { bundesland: 'Berlin', regional_on_time_percentage: 74.2,
+        suburban_on_time_percentage: 89.1 },
+    ],
+  });
+  assert.equal(analytics.networkPerformance[0].onTimeProbability, 0.78);
+  assert.equal(analytics.regionalPerformance[0].bundesland, 'Berlin');
+  assert.equal(analytics.isMock, true);
 });
 
 test('accepts the live departure contract and keeps expected time and delay', () => {

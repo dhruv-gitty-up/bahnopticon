@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react';
 import type { Ref } from 'react';
 import { apiUrl } from './api';
+import type { NetworkPerformance } from './analytics';
+import { loadSevenDayAnalytics } from './analyticsClient';
 import { parseDepartures } from './departures';
 import type { Departure } from './departures';
 import type { StationFeature, VehicleFeature } from './transit';
 import { delayLabel, formatDateTime, formatTime, PRODUCT_LABELS } from './transitPresentation';
+
+const compactNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+
+function inlineDelay(delay: number | null): string {
+  if (delay == null) return 'delay unavailable';
+  const sign = delay >= 0 ? '+' : '−';
+  return `${sign}${compactNumber.format(Math.abs(delay))} min`;
+}
 
 export function VehicleHoverTooltip({ vehicle, tooltipRef }: {
   vehicle: VehicleFeature;
@@ -37,6 +47,27 @@ export function VehicleDetailsPanel({ vehicle, feedLive, onClose }: {
   onClose: () => void;
 }) {
   const { properties } = vehicle;
+  const [trend, setTrend] = useState<NetworkPerformance | null>(null);
+  const [trendLoading, setTrendLoading] = useState(true);
+  const analyticsProduct = properties.type === 'national' ? 'nationalExpress' : properties.type;
+  const scheduled = properties.nextStationScheduledTime ?? properties.scheduledTime;
+  const expected = properties.nextStationExpectedTime ?? properties.expectedTime;
+  const nextDelay = properties.nextStationDelay ?? properties.delay;
+
+  useEffect(() => {
+    let active = true;
+    loadSevenDayAnalytics().then(payload => {
+      if (!active) return;
+      setTrend(payload.networkPerformance.find(row => row.product === analyticsProduct) ?? null);
+      setTrendLoading(false);
+    }).catch(() => {
+      if (!active) return;
+      setTrend(null);
+      setTrendLoading(false);
+    });
+    return () => { active = false; };
+  }, [analyticsProduct]);
+
   return (
     <section className="island detail-panel vehicle-details" aria-label="Selected vehicle details">
       <div className="panel-heading">
@@ -52,11 +83,30 @@ export function VehicleDetailsPanel({ vehicle, feedLive, onClose }: {
       </p>
       <dl className="detail-list">
         <div><dt>Full route</dt><dd>{properties.route ?? 'Unavailable'}</dd></div>
-        <div><dt>Next station</dt><dd className="station-name">{properties.nextStation ?? 'Unavailable'}</dd></div>
+        <div className="next-station-row">
+          <dt>Next station</dt>
+          <dd>
+            <strong className="station-name">{properties.nextStation ?? 'Unavailable'}</strong>
+            <span>{formatTime(scheduled)} ({inlineDelay(nextDelay)}) → {formatTime(expected)}</span>
+          </dd>
+        </div>
         <div><dt>Destination</dt><dd className="station-name">{properties.destination ?? 'Unavailable'}</dd></div>
         <div><dt>Scheduled</dt><dd>{formatDateTime(properties.scheduledTime)}</dd></div>
         <div><dt>Expected</dt><dd>{formatDateTime(properties.expectedTime)}</dd></div>
       </dl>
+      <div className="trend-card" aria-live="polite">
+        <p className="eyebrow">7-Day History</p>
+        {trendLoading ? (
+          <p className="trend-value">Loading network trend…</p>
+        ) : trend ? (
+          <>
+            <p className="trend-value">{Math.round(trend.onTimeProbability * 100)}% On-Time</p>
+            <p className="trend-meta">Average delay {compactNumber.format(trend.averageDelayMinutes)} min</p>
+          </>
+        ) : (
+          <p className="trend-value">History unavailable</p>
+        )}
+      </div>
       {!feedLive && <p className="empty-message">Showing the last received vehicle information.</p>}
     </section>
   );

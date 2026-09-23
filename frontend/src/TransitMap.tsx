@@ -129,6 +129,7 @@ export interface TransitMapInteractions {
 export interface TransitMapProps {
   vehicles: VehicleFeature[];
   activeFilters: readonly TrackProduct[];
+  selectedRegion: string;
   selectedVehicleId?: string | null;
   onSelect: (vehicleId: string | null) => void;
   onStationSelect?: (station: StationFeature) => void;
@@ -137,7 +138,8 @@ export interface TransitMapProps {
 }
 
 export const TransitMap = memo(function TransitMap({
-  vehicles, activeFilters, selectedVehicleId, onSelect, onStationSelect, onVehiclePointerMove, onInteractionChange,
+  vehicles, activeFilters, selectedRegion, selectedVehicleId, onSelect, onStationSelect,
+  onVehiclePointerMove, onInteractionChange,
 }: TransitMapProps) {
   const trackData = useGeoJsonResource('/tracks', parseTrackCollection, EMPTY_TRACKS);
   const borders = useGeoJsonResource('/borders', parseBorderCollection, EMPTY_BORDERS);
@@ -262,13 +264,11 @@ export const TransitMap = memo(function TransitMap({
     return trackBounds.filter(({ feature, west: trackWest, south: trackSouth,
       east: trackEast, north: trackNorth }) => (
       activeFilters.includes(feature.properties.product)
-      && isVisibleAtLevel(feature.properties.product, lodLevel)
-      && (lodLevel > 0 || feature.properties.product !== 'nationalExpress'
-        || feature.properties.highspeed === 'yes')
+      && (feature.properties.product !== 'suburban' || viewState.zoom >= 8.5)
       && trackEast >= west - longitudePad && trackWest <= east + longitudePad
       && trackNorth >= south - latitudePad && trackSouth <= north + latitudePad
     )).map(({ feature }) => feature);
-  }, [activeFilters, lodLevel, trackBounds, viewportBounds]);
+  }, [activeFilters, trackBounds, viewState.zoom, viewportBounds]);
   const visibleVehicles = useMemo(() => mapping.slots.filter(
     (vehicle): vehicle is VehicleFeature => vehicle !== null
       && activeFilters.includes(vehicle.properties.type as TrackProduct)
@@ -284,13 +284,23 @@ export const TransitMap = memo(function TransitMap({
     id: 'transit-borders',
     data: borders,
     stroked: true,
-    filled: false,
-    getLineColor: feature => feature.properties.admin_level === '2'
-      ? [214, 224, 232, 210] : [174, 187, 198, 68],
-    getLineWidth: feature => feature.properties.admin_level === '2' ? 2 : 0.5,
+    filled: true,
+    getFillColor: feature => feature.properties.name === selectedRegion
+      ? [255, 255, 255, 40] : [0, 0, 0, 0],
+    getLineColor: feature => feature.properties.name === selectedRegion
+      ? [255, 255, 255, 255]
+      : feature.properties.admin_level === '2'
+        ? [214, 224, 232, 210] : [174, 187, 198, 68],
+    getLineWidth: feature => feature.properties.name === selectedRegion
+      ? 3 : feature.properties.admin_level === '2' ? 2 : 0.5,
     lineWidthUnits: 'pixels',
     pickable: false,
-  }), [borders]);
+    updateTriggers: {
+      getFillColor: selectedRegion,
+      getLineColor: selectedRegion,
+      getLineWidth: selectedRegion,
+    },
+  }), [borders, selectedRegion]);
 
   const trackLayer = useMemo(() => new GeoJsonLayer<TrackProperties>({
     id: 'transit-tracks',

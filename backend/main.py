@@ -46,6 +46,26 @@ BBOX = {"north": 55.0, "south": 47.2, "west": 5.8, "east": 15.0}
 VALID_PRODUCTS = {"nationalExpress", "national", "regional", "suburban"}
 DEPARTURE_CACHE_SECONDS = 15
 TRIP_CACHE_SECONDS = 300
+ANALYTICS_7DAY = {
+    "period_days": 7,
+    "is_mock": True,
+    "network_performance": [
+        {"product": "nationalExpress", "label": "ICE",
+         "on_time_probability": 0.82, "average_delay_minutes": 6.8},
+        {"product": "regional", "label": "Regional",
+         "on_time_probability": 0.76, "average_delay_minutes": 8.9},
+        {"product": "suburban", "label": "S-Bahn",
+         "on_time_probability": 0.88, "average_delay_minutes": 4.1},
+    ],
+    "regional_performance": [
+        {"bundesland": "Bayern", "regional_on_time_percentage": 78.4,
+         "suburban_on_time_percentage": 86.9},
+        {"bundesland": "Berlin", "regional_on_time_percentage": 74.2,
+         "suburban_on_time_percentage": 89.1},
+        {"bundesland": "Nordrhein-Westfalen", "regional_on_time_percentage": 72.8,
+         "suburban_on_time_percentage": 84.6},
+    ],
+}
 TRACKS_UNAVAILABLE_DETAIL = (
     "Track geometry unavailable: the PostGIS-backed in-memory cache is empty"
 )
@@ -232,13 +252,24 @@ def stopover_details(movement, current_time):
     raw_delay = delay_row.get("arrivalDelay") if delay_row else None
     if raw_delay is None and delay_row:
         raw_delay = delay_row.get("departureDelay")
+    if isinstance(raw_delay, (int, float)) and not isinstance(raw_delay, bool) and math.isfinite(raw_delay):
+        delay_minutes = raw_delay / 60
+    elif planned and expected:
+        delay_minutes = (
+            datetime.fromisoformat(expected.replace("Z", "+00:00"))
+            - datetime.fromisoformat(planned.replace("Z", "+00:00"))
+        ).total_seconds() / 60
+    else:
+        delay_minutes = 0
     return {
         "next_station": station_name(next_row["stop"]) if next_row else None,
         "destination": destination or nonempty_string(movement.get("direction")),
         "scheduled_time": planned,
         "expected_time": expected,
-        "delay_minutes": raw_delay / 60 if isinstance(raw_delay, (int, float))
-        and not isinstance(raw_delay, bool) and math.isfinite(raw_delay) else 0,
+        "delay_minutes": delay_minutes,
+        "next_station_scheduled_time": planned,
+        "next_station_expected_time": expected,
+        "next_station_delay_minutes": delay_minutes,
     }
 
 
@@ -316,6 +347,9 @@ def validate_stream_snapshot(message):
         properties = feature.get("properties")
         properties = dict(properties) if isinstance(properties, dict) else {}
         properties["delay_minutes"] = numeric_delay(properties.get("delay_minutes"))
+        properties["next_station_delay_minutes"] = numeric_delay(
+            properties.get("next_station_delay_minutes")
+        )
         validated_feature = dict(feature)
         validated_feature["properties"] = properties
         validated_features.append(validated_feature)
@@ -497,6 +531,12 @@ async def broadcast(message):
 @app.get("/health")
 async def health():
     return {"status": "ok", "upstream": upstream_status, "last_success": last_success}
+
+
+@app.get("/analytics/7day")
+async def analytics_7day():
+    """Return a stable mock contract while historical aggregation is built."""
+    return ANALYTICS_7DAY
 
 
 @app.get("/geometry")

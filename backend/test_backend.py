@@ -48,6 +48,31 @@ class CorsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("access-control-allow-origin", response.headers)
 
 
+class AnalyticsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_seven_day_mock_contract(self):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://test"
+        ) as client:
+            response = await client.get("/analytics/7day")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["period_days"], 7)
+        self.assertIs(payload["is_mock"], True)
+        self.assertEqual(
+            {row["label"] for row in payload["network_performance"]},
+            {"ICE", "Regional", "S-Bahn"},
+        )
+        self.assertTrue(all(
+            0 <= row["on_time_probability"] <= 1
+            and row["average_delay_minutes"] >= 0
+            for row in payload["network_performance"]
+        ))
+        self.assertEqual(
+            {row["bundesland"] for row in payload["regional_performance"]},
+            {"Bayern", "Berlin", "Nordrhein-Westfalen"},
+        )
+
+
 class NormalizationTests(unittest.TestCase):
     def setUp(self):
         main.engine = InterpolationEngine()
@@ -109,6 +134,11 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(properties["destination"], "Oranienburg")
         self.assertEqual(properties["scheduled_time"], "2026-09-17T23:30:00+02:00")
         self.assertEqual(properties["expected_time"], "2026-09-17T23:31:00+02:00")
+        self.assertEqual(properties["next_station_scheduled_time"],
+                         "2026-09-17T23:30:00+02:00")
+        self.assertEqual(properties["next_station_expected_time"],
+                         "2026-09-17T23:31:00+02:00")
+        self.assertEqual(properties["next_station_delay_minutes"], 1)
         self.assertEqual(properties["route"], "S1 Oranienburg")
 
     def test_past_origin_is_not_misreported_as_next_stop(self):

@@ -21,6 +21,9 @@ export interface VehicleFeature {
     nextStation: string | null;
     scheduledTime: string | null;
     expectedTime: string | null;
+    nextStationScheduledTime: string | null;
+    nextStationExpectedTime: string | null;
+    nextStationDelay: number | null;
     durationMs: number;
     start: Coordinates;
     routeStatus: RouteStatus;
@@ -168,6 +171,7 @@ export function parseVehicleSnapshot(value: unknown, animationStartedAt = Date.n
       ? geometry.coordinates : geometry.coordinates[geometry.coordinates.length - 1];
     const duration = properties.duration_ms;
     const delay = properties.delay_minutes;
+    const nextStationDelay = properties.next_station_delay_minutes;
 
     vehicles.set(id, {
       type: 'Feature', id,
@@ -182,6 +186,12 @@ export function parseVehicleSnapshot(value: unknown, animationStartedAt = Date.n
         nextStation: typeof properties.next_station === 'string' ? properties.next_station : null,
         scheduledTime: typeof properties.scheduled_time === 'string' ? properties.scheduled_time : null,
         expectedTime: typeof properties.expected_time === 'string' ? properties.expected_time : null,
+        nextStationScheduledTime: typeof properties.next_station_scheduled_time === 'string'
+          ? properties.next_station_scheduled_time : null,
+        nextStationExpectedTime: typeof properties.next_station_expected_time === 'string'
+          ? properties.next_station_expected_time : null,
+        nextStationDelay: typeof nextStationDelay === 'number' && Number.isFinite(nextStationDelay)
+          ? nextStationDelay : null,
         durationMs: typeof duration === 'number' && Number.isFinite(duration)
           ? Math.max(0, Math.min(30_000, duration)) : 15_000,
         start: isCoordinates(properties.start)
@@ -246,20 +256,39 @@ export function parseJourneyFeature(value: unknown): Feature<LineString> {
   return candidate as unknown as Feature<LineString>;
 }
 
-export type BorderProperties = { admin_level: '2' | '4' };
+export type BorderProperties = { admin_level: '2' | '4'; name: string };
 
 /** Keep only line or polygon boundaries that Deck.gl can stroke. */
 export function parseBorderCollection(value: unknown): FeatureCollection<Geometry, BorderProperties> {
   if (!isRecord(value) || value.type !== 'FeatureCollection' || !Array.isArray(value.features)) {
     throw new Error('Expected a border FeatureCollection');
   }
-  const features = value.features.filter((feature: unknown) => isRecord(feature)
-    && feature.type === 'Feature' && isRecord(feature.properties)
-    && (feature.properties.admin_level === '2' || feature.properties.admin_level === '4')
-    && isRecord(feature.geometry)
-    && ['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon'].includes(String(feature.geometry.type))
-    && Array.isArray(feature.geometry.coordinates));
-  return { type: 'FeatureCollection', features: features as Feature<Geometry, BorderProperties>[] };
+  const features = value.features.flatMap((feature: unknown): Feature<Geometry, BorderProperties>[] => {
+    if (!isRecord(feature) || feature.type !== 'Feature' || !isRecord(feature.properties)
+      || (feature.properties.admin_level !== '2' && feature.properties.admin_level !== '4')
+      || !isRecord(feature.geometry)
+      || !['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon'].includes(String(feature.geometry.type))
+      || !Array.isArray(feature.geometry.coordinates)) return [];
+    let geometry = feature.geometry as unknown as Geometry;
+    // The backend intentionally stores border exteriors as lines. Closed rings
+    // can be reconstructed here so Deck.gl can fill a selected Bundesland.
+    if (geometry.type === 'MultiLineString') {
+      const polygons = geometry.coordinates
+        .filter(ring => ring.length >= 4 && ring.every(isCoordinates))
+        .map(ring => [ring]);
+      if (polygons.length) geometry = { type: 'MultiPolygon', coordinates: polygons };
+    }
+    return [{
+      type: 'Feature',
+      id: typeof feature.id === 'string' || typeof feature.id === 'number' ? feature.id : undefined,
+      properties: {
+        admin_level: feature.properties.admin_level,
+        name: typeof feature.properties.name === 'string' ? feature.properties.name : 'Unknown region',
+      },
+      geometry,
+    }];
+  });
+  return { type: 'FeatureCollection', features };
 }
 
 export interface VehicleSlots {
