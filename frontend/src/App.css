@@ -133,10 +133,6 @@ dd { margin: 0; text-align: right; }
 .eyebrow { color: #a8c1d8; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .detail-panel { width: min(410px, 42vw); max-height: calc(100dvh - 64px); }
 .vehicle-details {
-  position: absolute;
-  z-index: 50;
-  right: 24px;
-  bottom: 24px;
   max-height: calc(50dvh - 32px);
 }
 .detail-panel h2 { font-size: 23px; line-height: 1.2; margin-top: 4px; overflow-wrap: anywhere; }
@@ -165,12 +161,12 @@ dd { margin: 0; text-align: right; }
 }
 .trend-value { margin-top: 7px; color: #f8fafc; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
 .trend-meta { margin-top: 4px; color: #a8b9cb; font-size: 11px; }
+.trend-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.trend-stats > div { display: block; padding: 10px; border: 1px solid #ffffff14; border-radius: 10px; background: #ffffff08; }
+.trend-stats dt { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.trend-stats dd { margin-top: 5px; color: #f8fafc; font-size: 17px; font-weight: 800; text-align: left; }
 
 .analytics-sidebar {
-  position: absolute;
-  z-index: 40;
-  top: 24px;
-  right: 24px;
   width: 330px;
   max-height: calc(100dvh - 48px);
 }

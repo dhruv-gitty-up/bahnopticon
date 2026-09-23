@@ -25,7 +25,11 @@ export function AnalyticsSidebar({ selectedRegion, onSelectRegion }: {
   }, []);
 
   return (
-    <aside className="island analytics-sidebar" aria-label="Seven-day network analytics">
+    <aside
+      className="island analytics-sidebar fixed top-6 right-6 z-40"
+      style={{ position: 'fixed', top: '1.5rem', right: '1.5rem', zIndex: 40 }}
+      aria-label="Seven-day network analytics"
+    >
       <div className="analytics-heading">
         <div>
           <p className="eyebrow">Network intelligence</p>

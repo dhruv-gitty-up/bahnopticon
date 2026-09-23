@@ -70,7 +70,11 @@ export function VehicleDetailsPanel({ vehicle, feedLive, onClose }: {
   }, [properties.line]);
 
   return (
-    <section className="island detail-panel vehicle-details" aria-label="Selected vehicle details">
+    <section
+      className="island detail-panel vehicle-details fixed bottom-6 right-6 z-50"
+      style={{ position: 'fixed', right: '1.5rem', bottom: '1.5rem', zIndex: 50 }}
+      aria-label="Selected vehicle details"
+    >
       <div className="panel-heading">
         <div>
           <p className="eyebrow">{PRODUCT_LABELS[properties.type] ?? properties.type}</p>
@@ -98,14 +102,20 @@ export function VehicleDetailsPanel({ vehicle, feedLive, onClose }: {
       <div className="trend-card" aria-live="polite">
         <p className="eyebrow">7-Day Train History</p>
         {trendLoading ? (
-          <p className="trend-value">Loading train history…</p>
+          <p className="trend-value">Gathering history…</p>
         ) : trend ? (
-          <>
-            <p className="trend-value">{Math.round(trend.onTimeProbability * 100)}% On-Time</p>
-            <p className="trend-meta">{trend.lineId} · Average delay {compactNumber.format(trend.averageDelayMinutes)} min</p>
-          </>
+          <dl className="trend-stats">
+            <div>
+              <dt>On-Time</dt>
+              <dd>{Math.round(trend.onTimeProbability * 100)}%</dd>
+            </div>
+            <div>
+              <dt>Average Delay</dt>
+              <dd>{compactNumber.format(trend.averageDelayMinutes)} min</dd>
+            </div>
+          </dl>
         ) : (
-          <p className="trend-value">History unavailable</p>
+          <p className="trend-value">Gathering history…</p>
         )}
       </div>
       {!feedLive && <p className="empty-message">Showing the last received vehicle information.</p>}
