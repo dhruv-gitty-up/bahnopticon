@@ -68,7 +68,8 @@ class HafasClientTests(unittest.IsolatedAsyncioTestCase):
                          ["nationalExpress", "national", "regional", "suburban"])
         command = create_process.await_args.args
         self.assertEqual(command[0], "node-test")
-        self.assertEqual(command[1], str(provider.radar_script))
+        self.assertEqual(command[1], "--max-old-space-size=128")
+        self.assertEqual(command[2], str(provider.radar_script))
 
     async def test_trip_bridge_converts_ordered_hafas_points_to_linestring(self):
         points = [
@@ -88,7 +89,8 @@ class HafasClientTests(unittest.IsolatedAsyncioTestCase):
             "type": "LineString", "coordinates": [[7.0, 51.0], [8.0, 52.0]],
         })
         self.assertEqual(feature["properties"]["destination"], "Berlin Hbf")
-        self.assertEqual(create_process.await_args.args[2], "trip/#123")
+        self.assertEqual(create_process.await_args.args[1], "--max-old-space-size=128")
+        self.assertEqual(create_process.await_args.args[3], "trip/#123")
 
     async def test_trip_bridge_rejects_missing_polyline_and_times_out(self):
         provider = HafasClient(trip_timeout=0.001)

@@ -28,18 +28,33 @@ class OsmClientTests(unittest.IsolatedAsyncioTestCase):
             "geometry": {"type": "Point", "coordinates": [8, 50]},
         }]}
         connection = AsyncMock()
-        connection.fetchval.side_effect = [json.dumps(tracks), stations]
+        connection.fetchval.side_effect = [json.dumps(tracks), json.dumps(tracks), stations]
         pool = self.fake_pool(connection)
         client = OsmClient(database_url="postgresql://authenticated")
         client.pool = pool
         self.addAsyncCleanup(client.close)
 
-        self.assertEqual(await client.get_track_feature_collection(), tracks)
+        bounds = (7.0, 49.0, 9.0, 51.0)
+        self.assertEqual(await client.get_track_feature_collection(
+            bounds,
+            limit=500,
+            products=("nationalExpress", "national"),
+        ), tracks)
+        self.assertEqual(json.loads(await client.get_track_feature_collection_payload(
+            bounds,
+            limit=500,
+            products=("nationalExpress", "national"),
+        )), tracks)
         self.assertEqual(await client.get_station_feature_collection(), stations)
-        track_query, station_query = [call.args[0] for call in connection.fetchval.await_args_list]
+        track_call, payload_call, station_call = connection.fetchval.await_args_list
+        track_query, station_query = track_call.args[0], station_call.args[0]
         self.assertIn("extensions.ST_AsGeoJSON(geom)", track_query)
-        self.assertIn("FROM public.tracks", track_query)
+        self.assertIn("tracks.geom OPERATOR(extensions.&&) bounds.geom", track_query)
+        self.assertIn("extensions.ST_Intersects(tracks.geom, bounds.geom)", track_query)
+        self.assertIn("tracks.product = ANY($6::text[])", track_query)
         self.assertIn("json_build_object('product', product)", track_query)
+        self.assertEqual(track_call.args[1:], (*bounds, 500, ["nationalExpress", "national"]))
+        self.assertEqual(payload_call.args, track_call.args)
         self.assertIn("extensions.ST_AsGeoJSON(geom)", station_query)
         self.assertIn("FROM public.stations", station_query)
         self.assertIn("'station_id', id", station_query)

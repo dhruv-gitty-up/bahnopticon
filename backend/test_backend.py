@@ -111,6 +111,7 @@ class DeploymentTests(unittest.TestCase):
             main.app,
             host="0.0.0.0",
             port=4321,
+            workers=1,
             timeout_graceful_shutdown=10,
         )
 
@@ -349,7 +350,6 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         main.client_queues.clear()
         main.latest_payload = None
-        main.track_payload = None
         main.station_payload = None
         main.border_payload = None
         main.station_by_id = {}
@@ -439,18 +439,18 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             osm.close.assert_awaited_once()
             stations.close.assert_awaited_once()
 
-    async def test_map_data_loads_tracks_before_stations(self):
+    async def test_map_data_does_not_preload_tracks(self):
         order = []
-
-        async def tracks():
-            order.append("tracks")
 
         async def stations():
             order.append("stations")
 
-        with patch.object(main, "load_tracks", tracks), patch.object(main, "load_stations", stations):
+        async def borders():
+            order.append("borders")
+
+        with patch.object(main, "load_stations", stations), patch.object(main, "load_borders", borders):
             await main.load_map_data()
-        self.assertEqual(order, ["tracks", "stations"])
+        self.assertCountEqual(order, ["stations", "borders"])
 
     async def test_polling_recovers_and_preserves_cache_during_outage(self):
         await main.broadcast({"type": "FeatureCollection", "features": ["cached"]})
@@ -618,100 +618,69 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("is_mock", payload)
         self.assertEqual(payload["features"][0]["id"], "recovered")
 
-    async def test_track_loader_uses_postgis_collection_and_builds_graph(self):
+    async def test_tracks_query_postgis_for_only_the_requested_viewport(self):
         collection = {"type": "FeatureCollection", "features": [{
             "type": "Feature", "id": "osm:way:42",
             "properties": {"product": "nationalExpress"},
             "geometry": {"type": "LineString", "coordinates": [[8.0, 50.0], [8.1, 50.1]]},
         }]}
         provider = AsyncMock()
-        provider.get_track_feature_collection.return_value = collection
-        with patch.object(main, "osm", provider), self.assertLogs("main", level="INFO") as logs:
-            await asyncio.wait_for(main.load_tracks(), timeout=1)
-        provider.get_track_feature_collection.assert_awaited_once_with()
-        self.assertIsNotNone(main.engine._graph)
-        response = await main.tracks()
+        provider.get_track_feature_collection_payload.return_value = json.dumps(collection).encode()
+        with patch.object(main, "osm", provider):
+            response = await main.tracks(7.0, 49.0, 9.0, 51.0, "nationalExpress,national")
+        provider.get_track_feature_collection_payload.assert_awaited_once_with(
+            (7.0, 49.0, 9.0, 51.0),
+            limit=main.TRACK_FEATURE_LIMIT,
+            products=("nationalExpress", "national"),
+        )
+        self.assertIsNone(main.engine._graph)
         self.assertEqual(json.loads(response.body)["features"][0]["id"], "osm:way:42")
-        self.assertTrue(any("Loaded 1 railway tracks from PostGIS" in line for line in logs.output))
+        self.assertEqual(response.headers["cache-control"], "public, max-age=30")
 
-    async def test_track_loader_retries_after_postgis_failure(self):
+    async def test_track_query_fails_loudly_without_retaining_a_global_cache(self):
+        provider = AsyncMock()
+        provider.get_track_feature_collection_payload.side_effect = RuntimeError("database unavailable")
+        with patch.object(main, "osm", provider), self.assertLogs("main", level="ERROR"):
+            with self.assertRaises(main.HTTPException) as error:
+                await main.tracks(7.0, 49.0, 9.0, 51.0)
+        self.assertEqual(error.exception.status_code, 503)
+        self.assertEqual(error.exception.detail, main.TRACKS_UNAVAILABLE_DETAIL)
+        self.assertEqual(error.exception.headers, {"Retry-After": "15"})
+
+    async def test_geometry_and_tracks_share_the_bounded_postgis_query(self):
         collection = {"type": "FeatureCollection", "features": [{
             "type": "Feature", "id": "osm:way:42",
-            "properties": {"product": "nationalExpress"},
-            "geometry": {"type": "LineString", "coordinates": [[8.0, 50.0], [8.1, 50.1]]},
+            "properties": {"product": "regional"},
+            "geometry": {"type": "LineString", "coordinates": [[13.4, 52.5], [13.401, 52.501]]},
         }]}
         provider = AsyncMock()
-        provider.get_track_feature_collection.side_effect = [RuntimeError("database unavailable"), collection]
-        with patch.object(main, "osm", provider), \
-             patch.object(main.asyncio, "sleep", new_callable=AsyncMock) as sleep:
-            await main.load_tracks()
-        self.assertEqual(provider.get_track_feature_collection.await_count, 2)
-        sleep.assert_awaited_once_with(60)
-
-    async def test_tracks_are_served_while_graph_rebuilds(self):
-        collection = {"type": "FeatureCollection", "features": [{
-            "type": "Feature", "id": "osm:way:42",
-            "properties": {"product": "nationalExpress"},
-            "geometry": {"type": "LineString", "coordinates": [[8.0, 50.0], [8.1, 50.1]]},
-        }]}
-        rebuilding = threading.Event()
-        release = threading.Event()
-        actual_load = main.engine.load_osm_data
-        def delayed_load(osm_data):
-            rebuilding.set()
-            release.wait(2)
-            return actual_load(osm_data)
-        provider = AsyncMock()
-        provider.get_track_feature_collection.return_value = collection
-        with patch.object(main, "osm", provider), \
-             patch.object(main.engine, "load_osm_data", side_effect=delayed_load):
-            task = asyncio.create_task(main.load_tracks())
-            try:
-                self.assertTrue(await asyncio.to_thread(rebuilding.wait, 1))
-                response = await main.tracks()
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(len(json.loads(response.body)["features"]), 1)
-            finally:
-                release.set()
-                await task
-        provider.get_track_feature_collection.assert_awaited_once_with()
-
-    async def test_geometry_endpoint_serves_cached_linestrings(self):
+        provider.get_track_feature_collection_payload.return_value = json.dumps(collection).encode()
         for endpoint in (main.tracks, main.geometry):
-            with self.subTest(endpoint=endpoint.__name__), \
-                 self.assertLogs("main", level="ERROR") as logs, \
-                 self.assertRaises(main.HTTPException) as error:
-                await endpoint()
-            self.assertEqual(error.exception.status_code, 503)
-            self.assertEqual(error.exception.detail, main.TRACKS_UNAVAILABLE_DETAIL)
-            self.assertEqual(error.exception.headers, {"Retry-After": "60"})
-            self.assertIn("PostGIS-backed in-memory cache is empty", logs.output[0])
-        rail = way([1, 2, 3], [(13.4, 52.5), (13.401, 52.5), (13.401, 52.501)])
-        rail.update({"id": 42, "tags": {"railway": "rail", "name": "Berlin test track"}})
-        self.assertTrue(main.engine.load_osm_data({"elements": [rail]}))
-        main.track_payload = main.engine.geometry_payload
-        response = await main.geometry()
-        self.assertEqual(response.media_type, "application/geo+json")
-        collection = json.loads(response.body)
-        self.assertEqual(collection["type"], "FeatureCollection")
-        self.assertEqual(collection["features"][0]["id"], "osm:way:42")
-        self.assertEqual(collection["features"][0]["geometry"]["type"], "LineString")
-        self.assertEqual(collection["features"][0]["geometry"]["coordinates"],
-                         [[13.4, 52.5], [13.401, 52.5], [13.401, 52.501]])
-        self.assertEqual(collection["features"][0]["properties"]["product"], "regional")
-        self.assertNotIn("category", collection["features"][0]["properties"])
-        alias = await main.tracks()
-        self.assertEqual(alias.body, response.body)
+            with self.subTest(endpoint=endpoint.__name__), patch.object(main, "osm", provider):
+                response = await endpoint(13.0, 52.0, 14.0, 53.0, "regional")
+            self.assertEqual(response.media_type, "application/geo+json")
+            self.assertEqual(json.loads(response.body), collection)
 
-    async def test_tracks_http_response_explains_empty_postgis_cache(self):
+    async def test_tracks_http_validates_and_forwards_bbox(self):
+        collection = {"type": "FeatureCollection", "features": []}
+        provider = AsyncMock()
+        provider.get_track_feature_collection_payload.return_value = json.dumps(collection).encode()
         transport = httpx.ASGITransport(app=main.app)
-        with self.assertLogs("main", level="ERROR"):
+        with patch.object(main, "osm", provider):
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                response = await client.get("/tracks")
-
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json(), {"detail": main.TRACKS_UNAVAILABLE_DETAIL})
-        self.assertEqual(response.headers["retry-after"], "60")
+                response = await client.get(
+                    "/tracks?min_lon=7&min_lat=49&max_lon=9&max_lat=51&products=nationalExpress,national"
+                )
+                incomplete = await client.get("/tracks?min_lon=7")
+                inverted = await client.get("/tracks?min_lon=9&min_lat=49&max_lon=7&max_lat=51")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(incomplete.status_code, 422)
+        self.assertEqual(inverted.status_code, 422)
+        provider.get_track_feature_collection_payload.assert_awaited_once_with(
+            (7.0, 49.0, 9.0, 51.0),
+            limit=main.TRACK_FEATURE_LIMIT,
+            products=("nationalExpress", "national"),
+        )
 
     async def test_border_endpoint_serves_cached_national_and_state_lines(self):
         await main.load_borders()
@@ -902,31 +871,9 @@ class TrackRoutingTests(unittest.TestCase):
             {"railway": "rail", "usage": "main"},
             {"railway": "rail", "usage": "branch"},
         ]
-        elements = []
-        for index, item in enumerate(tags):
-            element = way([index * 2 + 1, index * 2 + 2],
-                          [(13 + index * 0.01, 52), (13 + index * 0.01 + 0.001, 52)])
-            element.update({"id": index + 1, "tags": item})
-            elements.append(element)
-        self.assertTrue(self.engine.load_osm_data({"elements": elements}))
-        features = json.loads(self.engine.geometry_payload)["features"]
-        self.assertEqual([feature["properties"]["product"] for feature in features],
+        from osm_client import track_product
+        self.assertEqual([track_product(item) for item in tags],
                          ["subway", "suburban", "nationalExpress", "nationalExpress", "regional"])
-        self.assertTrue(all("category" not in feature["properties"] for feature in features))
-        self.assertEqual(features[2]["properties"]["highspeed"], "yes")
-        self.assertEqual(features[3]["properties"]["usage"], "main")
-
-    def test_subway_line_name_prefers_current_u_line_then_ref_or_name(self):
-        referenced = way([1, 2], [(13, 52), (13.001, 52)])
-        referenced["tags"] = {"railway": "subway", "ref": "U5", "name": "Alexanderplatz tunnel"}
-        named = way([3, 4], [(13.002, 52), (13.003, 52)])
-        named["tags"] = {"railway": "subway", "name": "U1"}
-        historic = way([5, 6], [(13.004, 52), (13.005, 52)])
-        historic["tags"] = {"railway": "subway", "ref": "C", "name": "U6"}
-        self.engine.load_osm_data({"elements": [referenced, named, historic]})
-        features = json.loads(self.engine.geometry_payload)["features"]
-        self.assertEqual([f["properties"]["line_name"] for f in features], ["U5", "U1", "U6"])
-        self.assertEqual(features[0]["properties"]["ref"], "U5")
 
     def test_vehicle_snaps_only_to_its_rail_mode(self):
         subway = way([1, 2], [(13, 52), (13.002, 52)])

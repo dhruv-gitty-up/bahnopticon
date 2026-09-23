@@ -1,5 +1,6 @@
 """Supabase PostGIS access and conversion for nationwide rail geometry."""
 
+import asyncio
 import json
 import logging
 import os
@@ -13,6 +14,17 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(os.getenv("BAHNOPTICON_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
 
 TRACKS_GEOJSON_QUERY = """
+WITH bounds AS (
+    SELECT extensions.ST_MakeEnvelope($1, $2, $3, $4, 4326) AS geom
+), visible_tracks AS (
+    SELECT tracks.id, tracks.product, tracks.geom
+    FROM public.tracks
+    CROSS JOIN bounds
+    WHERE tracks.geom OPERATOR(extensions.&&) bounds.geom
+      AND extensions.ST_Intersects(tracks.geom, bounds.geom)
+      AND tracks.product = ANY($6::text[])
+    LIMIT $5
+)
 SELECT json_build_object(
     'type', 'FeatureCollection',
     'features', COALESCE(
@@ -27,7 +39,7 @@ SELECT json_build_object(
         '[]'::json
     )
 )
-FROM public.tracks
+FROM visible_tracks
 """
 
 STATIONS_GEOJSON_QUERY = """
@@ -155,7 +167,7 @@ class OsmClient:
         self.pool = await asyncpg.create_pool(
             dsn=self.database_url,
             min_size=1,
-            max_size=4,
+            max_size=2,
             command_timeout=120,
             statement_cache_size=0,
             server_settings={"application_name": "bahnopticon-backend"},
@@ -170,11 +182,11 @@ class OsmClient:
             )
         logger.info("Connected PostGIS geometry pool as database role %s", database_role)
 
-    async def _feature_collection(self, query: str, label: str) -> Dict:
+    async def _feature_collection(self, query: str, label: str, *parameters) -> Dict:
         if self.pool is None:
             await self.connect()
         async with self.pool.acquire() as connection:
-            payload = await connection.fetchval(query)
+            payload = await connection.fetchval(query, *parameters)
         if isinstance(payload, str):
             payload = json.loads(payload)
         if not isinstance(payload, dict) or payload.get("type") != "FeatureCollection" \
@@ -182,8 +194,52 @@ class OsmClient:
             raise ValueError(f"PostGIS returned invalid {label} GeoJSON")
         return payload
 
-    async def get_track_feature_collection(self) -> Dict:
-        return await self._feature_collection(TRACKS_GEOJSON_QUERY, "track")
+    async def get_track_feature_collection(
+        self,
+        bounds: tuple[float, float, float, float],
+        limit: int = 10_000,
+        products: tuple[str, ...] = ("nationalExpress", "national", "regional", "suburban"),
+    ) -> Dict:
+        """Return tracks intersecting one WGS84 viewport, capped for low-memory hosts."""
+        min_lon, min_lat, max_lon, max_lat = bounds
+        return await self._feature_collection(
+            TRACKS_GEOJSON_QUERY,
+            "track",
+            min_lon,
+            min_lat,
+            max_lon,
+            max_lat,
+            limit,
+            list(products),
+        )
+
+    async def get_track_feature_collection_payload(
+        self,
+        bounds: tuple[float, float, float, float],
+        limit: int = 10_000,
+        products: tuple[str, ...] = ("nationalExpress", "national", "regional", "suburban"),
+    ) -> bytes:
+        """Return database-built GeoJSON bytes without materializing a Python feature tree."""
+        if self.pool is None:
+            await self.connect()
+        min_lon, min_lat, max_lon, max_lat = bounds
+        async with self.pool.acquire() as connection:
+            payload = await connection.fetchval(
+                TRACKS_GEOJSON_QUERY,
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat,
+                limit,
+                list(products),
+            )
+        if isinstance(payload, str):
+            return await asyncio.to_thread(payload.encode, "utf-8")
+        if isinstance(payload, dict):
+            return await asyncio.to_thread(
+                lambda: json.dumps(payload, allow_nan=False, separators=(",", ":")).encode("utf-8")
+            )
+        raise ValueError("PostGIS returned invalid track GeoJSON")
 
     async def get_station_feature_collection(self) -> Dict:
         return await self._feature_collection(STATIONS_GEOJSON_QUERY, "station")

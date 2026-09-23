@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MapLibre from 'react-map-gl/maplibre';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer, IconLayer, ScatterplotLayer } from '@deck.gl/layers';
@@ -11,6 +11,8 @@ import type { Feature, FeatureCollection, Geometry, LineString } from 'geojson';
 import { apiUrl } from './api';
 import { createTimedTrip, getVehiclePosition, parseBorderCollection, parseJourneyFeature, parseStationCollection, reconcileVehicleSlots, sampleRoute } from './transit';
 import type { BorderProperties, Coordinates, StationFeature, TimedTrip, VehicleFeature, VehicleSlots } from './transit';
+import { buildTrackRequestPath } from './trackViewport';
+import type { TrackViewportBounds } from './trackViewport';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 const INITIAL_VIEW_STATE = { longitude: 10.45, latitude: 51.16, zoom: 5.5, pitch: 0, bearing: 0 };
@@ -54,6 +56,7 @@ type IndexedTrack = {
   west: number; south: number; east: number; north: number;
 };
 const TRAIL_LENGTH_MS = 2_500;
+const TRACK_FETCH_DEBOUNCE_MS = 300;
 const isTrackProduct = (value: string): value is TrackProduct =>
   Object.prototype.hasOwnProperty.call(PRODUCT_COLORS, value);
 const getProductColor = (product: string): RGB =>
@@ -120,6 +123,66 @@ function useGeoJsonResource<T>(url: `/${string}`, parse: (value: unknown) => T, 
   return data;
 }
 
+/** Tracks follow the viewport; prior geometry stays visible while the next extent loads. */
+function useViewportTracks(
+  bounds: TrackViewportBounds,
+  products: readonly TrackProduct[],
+): FeatureCollection<LineString, TrackProperties> {
+  const [data, setData] = useState(EMPTY_TRACKS);
+  const requestGeneration = useRef(0);
+  const requestPath = useMemo(
+    () => products.length > 0 ? buildTrackRequestPath(bounds, products) : null,
+    [bounds, products],
+  );
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    if (requestPath === null) {
+      return;
+    }
+    let disposed = false;
+    let debounceTimer = 0;
+    let retryTimer = 0;
+    let controller: AbortController | null = null;
+
+    const load = async () => {
+      const requestController = new AbortController();
+      controller = requestController;
+      let retryMs = 10_000;
+      try {
+        const response = await fetch(apiUrl(requestPath), { signal: requestController.signal });
+        if (response.status === 503) {
+          const seconds = Number(response.headers.get('Retry-After'));
+          if (Number.isFinite(seconds) && seconds > 0) retryMs = seconds * 1_000;
+        }
+        if (!response.ok) {
+          const detail = (await response.text()).trim().slice(0, 500);
+          throw new Error(
+            `Failed to load ${requestPath}: HTTP ${response.status} ${response.statusText}${detail ? ` — ${detail}` : ''}`,
+          );
+        }
+        const collection = parseTrackCollection(await response.json());
+        if (!disposed && generation === requestGeneration.current) setData(collection);
+      } catch (error) {
+        if (!disposed && !requestController.signal.aborted && generation === requestGeneration.current) {
+          console.error(`[BahnOpticon] ${requestPath} unavailable; retrying in ${retryMs / 1_000}s.`, error);
+          retryTimer = window.setTimeout(load, retryMs);
+        }
+      }
+    };
+
+    debounceTimer = window.setTimeout(load, TRACK_FETCH_DEBOUNCE_MS);
+    return () => {
+      disposed = true;
+      controller?.abort();
+      window.clearTimeout(debounceTimer);
+      window.clearTimeout(retryTimer);
+    };
+  }, [requestPath]);
+
+  return data;
+}
+
 export interface TransitMapInteractions {
   hoveredVehicleId: string | null;
   clickedVehicleId: string | null;
@@ -141,13 +204,20 @@ export const TransitMap = memo(function TransitMap({
   vehicles, activeFilters, selectedRegion, selectedVehicleId, onSelect, onStationSelect,
   onVehiclePointerMove, onInteractionChange,
 }: TransitMapProps) {
-  const trackData = useGeoJsonResource('/tracks', parseTrackCollection, EMPTY_TRACKS);
-  const borders = useGeoJsonResource('/borders', parseBorderCollection, EMPTY_BORDERS);
-  const stations = useGeoJsonResource('/stations', parseStationCollection, EMPTY_STATIONS);
   const [viewState, setViewState] = useState<MapViewState>(INITIAL_VIEW_STATE);
   const [viewportSize, setViewportSize] = useState(() => ({
     width: window.innerWidth, height: window.innerHeight,
   }));
+  const viewportBounds = useMemo(() => new WebMercatorViewport({
+    ...viewState, width: viewportSize.width, height: viewportSize.height,
+  }).getBounds() as TrackViewportBounds, [viewState, viewportSize]);
+  const lodLevel = viewState.zoom < 6.5 ? 0 : viewState.zoom < 8.5 ? 1 : 2;
+  const trackProducts = useMemo(() => activeFilters.filter(
+    product => isVisibleAtLevel(product, lodLevel),
+  ), [activeFilters, lodLevel]);
+  const trackData = useViewportTracks(viewportBounds, trackProducts);
+  const borders = useGeoJsonResource('/borders', parseBorderCollection, EMPTY_BORDERS);
+  const stations = useGeoJsonResource('/stations', parseStationCollection, EMPTY_STATIONS);
   const [hoveredVehicleId, setHoveredVehicleId] = useState<string | null>(null);
   const [clickedVehicleId, setClickedVehicleId] = useState<string | null>(null);
   const [clickedStation, setClickedStation] = useState<StationFeature | null>(null);
@@ -241,7 +311,6 @@ export const TransitMap = memo(function TransitMap({
     return () => cancelAnimationFrame(requestId);
   }, [animation]);
 
-  const lodLevel = viewState.zoom < 6.5 ? 0 : viewState.zoom < 8.5 ? 1 : 2;
   const vehicleRadiusMin = viewState.zoom < 7 ? 2 : 4;
   const vehicleRadius = viewState.zoom < 7 ? 2
     : Math.min(12, Math.max(4, Math.round((viewState.zoom - 6) * 2)));
@@ -254,9 +323,6 @@ export const TransitMap = memo(function TransitMap({
     }
     return { feature, west, south, east, north };
   }), [trackData]);
-  const viewportBounds = useMemo(() => new WebMercatorViewport({
-    ...viewState, width: viewportSize.width, height: viewportSize.height,
-  }).getBounds(), [viewState, viewportSize]);
   const visibleTracks = useMemo(() => {
     const [west, south, east, north] = viewportBounds;
     const longitudePad = (east - west) * 0.1;

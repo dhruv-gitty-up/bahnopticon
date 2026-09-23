@@ -19,7 +19,7 @@ from hafas_client import (
     TripSubprocessError, TripSubprocessTimeout,
 )
 from borders import get_cached_borders
-from osm_client import OsmClient, track_features_to_osm
+from osm_client import OsmClient
 from station_client import StationClient
 from engine import InterpolationEngine
 
@@ -32,7 +32,6 @@ osm = None
 station_client = None
 engine = InterpolationEngine()
 latest_payload = None
-track_payload = None
 station_payload = None
 border_payload = None
 station_by_id = {}
@@ -93,36 +92,11 @@ ANALYTICS_7DAY = {
          "suburban_on_time_percentage": 85.9},
     ],
 }
-TRACKS_UNAVAILABLE_DETAIL = (
-    "Track geometry unavailable: the PostGIS-backed in-memory cache is empty"
-)
+TRACKS_UNAVAILABLE_DETAIL = "Track geometry unavailable from PostGIS"
+TRACK_FEATURE_LIMIT = max(1, min(int(os.getenv("TRACK_FEATURE_LIMIT", "10000")), 25_000))
+TRACK_PRODUCTS = frozenset({"nationalExpress", "national", "regional", "suburban"})
 # Rectangular sanity boundary covering Germany, Austria, and Switzerland.
 DACH_BOUNDS = {"north": 55.1, "south": 45.5, "west": 5.8, "east": 17.2}
-
-
-async def load_tracks():
-    """Load tracks from PostGIS and rebuild the in-memory routing graph."""
-    global track_payload
-    while True:
-        try:
-            collection = await osm.get_track_feature_collection()
-            if not collection["features"]:
-                raise ValueError("PostGIS tracks table is empty")
-            # Publish the database result before the CPU-heavy graph rebuild.
-            track_payload = await asyncio.to_thread(
-                lambda: json.dumps(collection, allow_nan=False, separators=(",", ":")).encode("utf-8")
-            )
-            osm_data = await asyncio.to_thread(track_features_to_osm, collection)
-            if not await asyncio.to_thread(engine.load_osm_data, osm_data):
-                track_payload = None
-                raise ValueError("PostGIS track geometry could not build a routing graph")
-            logger.info("Loaded %d railway tracks from PostGIS", len(collection["features"]))
-            return
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Could not load track geometry from PostGIS")
-        await asyncio.sleep(60)
 
 
 async def load_stations():
@@ -149,8 +123,8 @@ async def load_stations():
 
 
 async def load_map_data():
-    """Load database-backed map geometry and the independent border cache."""
-    await asyncio.gather(load_tracks(), load_stations(), load_borders())
+    """Load the small station and border datasets; tracks stay query-on-demand."""
+    await asyncio.gather(load_stations(), load_borders())
 
 
 async def load_borders():
@@ -171,7 +145,7 @@ async def load_borders():
 
 @asynccontextmanager
 async def lifespan(app):
-    global hafas, osm, station_client, latest_payload, track_payload, station_payload, border_payload, station_by_id
+    global hafas, osm, station_client, latest_payload, station_payload, border_payload, station_by_id
     global last_success, upstream_status, engine
     hafas = HafasClient(
         os.getenv("HAFAS_BASE_URL", "https://v6.vbb.transport.rest"),
@@ -188,7 +162,6 @@ async def lifespan(app):
     station_client = StationClient(os.getenv("HAFAS_BASE_URL", "https://v6.vbb.transport.rest"))
     engine = InterpolationEngine()
     latest_payload = None
-    track_payload = None
     station_payload = None
     border_payload = None
     station_by_id = {}
@@ -586,19 +559,74 @@ async def vehicle_analytics(line_id: str):
     }
 
 
+def _track_bounds(min_lon, min_lat, max_lon, max_lat):
+    values = (min_lon, min_lat, max_lon, max_lat)
+    if all(value is None for value in values):
+        return BBOX["west"], BBOX["south"], BBOX["east"], BBOX["north"]
+    if any(value is None for value in values):
+        raise HTTPException(status_code=422, detail=(
+            "min_lon, min_lat, max_lon, and max_lat must be provided together"
+        ))
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) for value in values):
+        raise HTTPException(status_code=422, detail="Track bbox values must be finite numbers")
+    if not (-180 <= min_lon < max_lon <= 180 and -90 <= min_lat < max_lat <= 90):
+        raise HTTPException(status_code=422, detail="Track bbox is invalid")
+    return min_lon, min_lat, max_lon, max_lat
+
+
+def _track_products(products):
+    if products is None:
+        return tuple(sorted(TRACK_PRODUCTS))
+    requested = tuple(dict.fromkeys(value.strip() for value in products.split(",") if value.strip()))
+    if not requested or any(value not in TRACK_PRODUCTS for value in requested):
+        raise HTTPException(status_code=422, detail="Track products are invalid")
+    return requested
+
+
+async def _tracks_response(min_lon=None, min_lat=None, max_lon=None, max_lat=None, products=None):
+    bounds = _track_bounds(min_lon, min_lat, max_lon, max_lat)
+    selected_products = _track_products(products)
+    try:
+        payload = await osm.get_track_feature_collection_payload(
+            bounds,
+            limit=TRACK_FEATURE_LIMIT,
+            products=selected_products,
+        )
+    except Exception as error:
+        logger.exception("Viewport track query failed for bbox=%s", bounds)
+        raise HTTPException(
+            status_code=503,
+            detail=TRACKS_UNAVAILABLE_DETAIL,
+            headers={"Retry-After": "15"},
+        ) from error
+    return Response(
+        content=payload,
+        media_type="application/geo+json",
+        headers={"Cache-Control": "public, max-age=30"},
+    )
+
+
 @app.get("/geometry")
-async def geometry():
-    if not track_payload:
-        logger.error(TRACKS_UNAVAILABLE_DETAIL)
-        raise HTTPException(status_code=503, detail=TRACKS_UNAVAILABLE_DETAIL,
-                            headers={"Retry-After": "60"})
-    return Response(content=track_payload, media_type="application/geo+json")
+async def geometry(
+    min_lon: float | None = None,
+    min_lat: float | None = None,
+    max_lon: float | None = None,
+    max_lat: float | None = None,
+    products: str | None = None,
+):
+    return await _tracks_response(min_lon, min_lat, max_lon, max_lat, products)
 
 
 @app.get("/tracks")
-async def tracks():
-    """Compatibility alias for clients that call the physical rail data tracks."""
-    return await geometry()
+async def tracks(
+    min_lon: float | None = None,
+    min_lat: float | None = None,
+    max_lon: float | None = None,
+    max_lat: float | None = None,
+    products: str | None = None,
+):
+    """Return only tracks intersecting the requested map viewport."""
+    return await _tracks_response(min_lon, min_lat, max_lon, max_lat, products)
 
 
 @app.get("/stations")
@@ -735,6 +763,7 @@ def run_server():
         app,
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 8000)),
+        workers=1,
         timeout_graceful_shutdown=10,
     )
 

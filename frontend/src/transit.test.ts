@@ -5,6 +5,7 @@ import { parseSevenDayAnalytics, parseVehicleAnalytics } from './analytics.ts';
 import { createTimedTrip, findVehicleById, getSnapshotTimestamp, getVehiclePosition, measureRoute, parseBorderCollection, parseJourneyFeature, parseStationCollection, parseVehicleSnapshot, reconcileVehicleSlots, sampleRoute } from './transit.ts';
 import type { VehicleSlots } from './transit.ts';
 import { formatDateTime, formatTime } from './transitPresentation.ts';
+import { buildTrackRequestPath } from './trackViewport.ts';
 
 const feature = (id: string, longitude = 13.4) => ({
   type: 'Feature',
@@ -12,6 +13,17 @@ const feature = (id: string, longitude = 13.4) => ({
   properties: { trip_id: id, line_name: 'S1', product: 'suburban', duration_ms: 15_000 },
 });
 const snapshot = (...features: unknown[]) => parseVehicleSnapshot({ type: 'FeatureCollection', features });
+
+test('builds a stable viewport-bounded track request', () => {
+  assert.equal(
+    buildTrackRequestPath([5.81234567, 47.23456789, 15.09876543, 54.98765432]),
+    '/tracks?min_lon=5.812346&min_lat=47.234568&max_lon=15.098765&max_lat=54.987654',
+  );
+  assert.equal(
+    buildTrackRequestPath([5.8, 47.2, 15, 55], ['nationalExpress', 'national']),
+    '/tracks?min_lon=5.8&min_lat=47.2&max_lon=15&max_lat=55&products=nationalExpress%2Cnational',
+  );
+});
 
 test('cached SSE replay preserves the source timestamp rather than appearing newly polled', () => {
   const original = { generated_at: 1_700_000_000 };

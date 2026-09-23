@@ -12,6 +12,7 @@ DEFAULT_RADAR_SCRIPT = Path(__file__).resolve().parent.parent / "microservice" /
 DEFAULT_TRIP_SCRIPT = Path(__file__).resolve().parent.parent / "microservice" / "hafas_trip.js"
 RADAR_SUBPROCESS_TIMEOUT = 75.0
 TRIP_SUBPROCESS_TIMEOUT = 45.0
+NODE_HEAP_LIMIT = "--max-old-space-size=128"
 
 
 class RadarSubprocessError(RuntimeError):
@@ -130,6 +131,7 @@ class HafasClient:
         try:
             process = await asyncio.create_subprocess_exec(
                 self.node_binary,
+                NODE_HEAP_LIMIT,
                 str(self.radar_script),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -206,7 +208,7 @@ class HafasClient:
             raise TripSubprocessError(f"Trip script does not exist: {self.trip_script}")
         try:
             process = await asyncio.create_subprocess_exec(
-                self.node_binary, str(self.trip_script), trip_id,
+                self.node_binary, NODE_HEAP_LIMIT, str(self.trip_script), trip_id,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
         except OSError as error:

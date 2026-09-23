@@ -2,10 +2,8 @@
 
 from dataclasses import dataclass, field
 from functools import lru_cache
-import json
 import logging
 import math
-import re
 import time
 from typing import Dict, Optional
 
@@ -150,7 +148,6 @@ class TrackGraph:
 class InterpolationEngine:
     def __init__(self):
         self._graph: Optional[TrackGraph] = None
-        self.geometry_payload: Optional[bytes] = None
         self.vehicle_states = {}  # trip ID -> last coordinate, observation time and last-seen time
         self._mock_graph = None
         self._mock_vehicles = []
@@ -159,7 +156,6 @@ class InterpolationEngine:
     def load_osm_data(self, osm_json: Dict) -> bool:
         """Build a metric graph and spatial index, then publish them atomically."""
         valid_ways = []
-        features = []
         for element in osm_json.get("elements", []):
             if not isinstance(element, dict) or element.get("type") != "way":
                 continue
@@ -191,29 +187,6 @@ class InterpolationEngine:
                     } else None
                     product = track_product(tags)
                     valid_ways.append((coordinates, ids, railway, product))
-                    properties = {
-                        key: tags[key] for key in ("railway", "name", "ref", "service", "highspeed", "usage")
-                        if isinstance(tags.get(key), str)
-                    }
-                    if railway == "subway":
-                        labels = [tags[key].strip() for key in ("ref", "name")
-                                  if isinstance(tags.get(key), str) and tags[key].strip()]
-                        line_name = next((label for label in labels
-                                          if re.search(r"\bU\s*\d", label, re.IGNORECASE)),
-                                         labels[0] if labels else None)
-                        if line_name:
-                            properties["line_name"] = line_name
-                    properties["product"] = product
-                    features.append({
-                        "type": "Feature",
-                        "id": f"osm:way:{element['id']}" if isinstance(element.get("id"), int)
-                        else f"osm:way:{len(features)}",
-                        "properties": properties,
-                        "geometry": {
-                            "type": "LineString",
-                            "coordinates": [[lon, lat] for lon, lat in coordinates],
-                        },
-                    })
 
         if not valid_ways:
             return False
@@ -269,11 +242,7 @@ class InterpolationEngine:
         mode_trees = {mode: STRtree(lines) for mode, lines in mode_shapes.items() if lines}
         network = TrackGraph(graph, segments, STRtree(shapes), mode_trees,
                              mode_segments, components, cosine_latitude)
-        geometry_payload = json.dumps({
-            "type": "FeatureCollection", "features": features,
-        }, allow_nan=False, separators=(",", ":")).encode("utf-8")
         self._graph = network
-        self.geometry_payload = geometry_payload
         return True
 
     def generate_mock_traffic(self, timestamp: Optional[float] = None) -> Dict:
