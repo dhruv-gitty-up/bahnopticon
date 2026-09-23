@@ -85,6 +85,10 @@ Export backend variables before launching Uvicorn. Vite reads frontend variables
 
 For Vercel frontend deployment from this monorepo, set the Vercel project root directory to `frontend` and configure `VITE_API_URL` as the deployed backend's HTTPS origin. The local `/api` proxy from `frontend/.env.example` is not a production backend route. `frontend/vercel.json` handles SPA deep links by rewriting them to `index.html`.
 
+For a temporary local backend exposed through Cloudflare Quick Tunnel, run `scripts/tunnel_sync.sh`. It replaces existing project Uvicorn and Cloudflared processes, starts both services, discovers the generated tunnel URL, updates `VITE_API_URL` across all Vercel environments, and creates a fresh Preview deployment. The script requires an authenticated Vercel CLI session, `cloudflared`, and `DATABASE_URL` in `.env.local` or the current environment.
+
+For the permanent backend, `render.yaml` defines the free `bahnopticon-backend` Docker service in Frankfurt. Connect the repository as a Render Blueprint and provide the Supabase `DATABASE_URL` when prompted. The container starts `backend/main.py`, binds to `0.0.0.0`, and converts Render's injected `PORT` to an integer before starting Uvicorn. `/health` is the Blueprint health-check path. After Render assigns the service URL, set that HTTPS origin as `VITE_API_URL` in Vercel and redeploy the frontend.
+
 ## API and data contract
 
 ### `GET /stream`

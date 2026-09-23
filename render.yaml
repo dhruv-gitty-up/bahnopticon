@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: bahnopticon-backend
+    runtime: docker
+    plan: free
+    region: frankfurt
+    autoDeploy: true
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://nachhause.vercel.app
+      - key: CORS_ORIGIN_REGEX
+        value: '(?i)^https://(?:[a-z0-9-]+\.)+vercel\.app$'

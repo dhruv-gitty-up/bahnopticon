@@ -9,6 +9,7 @@ import os
 import time
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -211,7 +212,8 @@ app = FastAPI(title="BahnOpticon Backend", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in os.getenv(
-        "CORS_ORIGINS", "http://localhost:5173,http://localhost:5174"
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://localhost:5174,https://nachhause.vercel.app",
     ).split(",") if origin.strip()],
     allow_origin_regex=os.getenv(
         "CORS_ORIGIN_REGEX",
@@ -725,3 +727,17 @@ async def sse_endpoint(request: Request):
         event_generator(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def run_server():
+    """Start the public server using Render's injected port."""
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        timeout_graceful_shutdown=10,
+    )
+
+
+if __name__ == "__main__":
+    run_server()

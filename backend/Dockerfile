@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8080 \
+    PORT=8000 \
     HAFAS_RADAR_SCRIPT=/app/microservice/hafas_radar.js \
     NODE_BINARY=node
 
@@ -26,6 +26,6 @@ COPY microservice/*.js /app/microservice/
 COPY data/borders_cache.geojson /app/data/borders_cache.geojson
 
 WORKDIR /app/backend
-EXPOSE 8080
+EXPOSE 8000
 
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-graceful-shutdown 10"]
+CMD ["python", "main.py"]

@@ -32,6 +32,7 @@ class CorsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_vercel_and_cloudflare_tunnel_origins_pass_preflight(self):
         for origin in (
+            "https://nachhause.vercel.app",
             "https://bahnopticon.vercel.app",
             "https://bahnopticon-git-preview-team.vercel.app",
             "https://random-words.trycloudflare.com",
@@ -99,6 +100,25 @@ class AnalyticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(payload["is_mock"], True)
         self.assertTrue(0 <= payload["on_time_probability"] <= 1)
         self.assertGreaterEqual(payload["average_delay_minutes"], 0)
+
+
+class DeploymentTests(unittest.TestCase):
+    def test_server_binds_publicly_to_render_port(self):
+        with patch.dict(main.os.environ, {"PORT": "4321"}), \
+             patch.object(main.uvicorn, "run") as run:
+            main.run_server()
+        run.assert_called_once_with(
+            main.app,
+            host="0.0.0.0",
+            port=4321,
+            timeout_graceful_shutdown=10,
+        )
+
+    def test_server_defaults_to_port_8000(self):
+        with patch.dict(main.os.environ, {}, clear=True), \
+             patch.object(main.uvicorn, "run") as run:
+            main.run_server()
+        self.assertEqual(run.call_args.kwargs["port"], 8000)
 
 
 class NormalizationTests(unittest.TestCase):
