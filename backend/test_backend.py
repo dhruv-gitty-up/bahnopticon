@@ -49,6 +49,13 @@ class CorsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AnalyticsTests(unittest.IsolatedAsyncioTestCase):
+    ALL_STATES = {
+        "Baden-Württemberg", "Bayern", "Berlin", "Brandenburg", "Bremen",
+        "Hamburg", "Hessen", "Mecklenburg-Vorpommern", "Niedersachsen",
+        "Nordrhein-Westfalen", "Rheinland-Pfalz", "Saarland", "Sachsen",
+        "Sachsen-Anhalt", "Schleswig-Holstein", "Thüringen",
+    }
+
     async def test_seven_day_mock_contract(self):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=main.app), base_url="http://test"
@@ -69,8 +76,29 @@ class AnalyticsTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(
             {row["bundesland"] for row in payload["regional_performance"]},
-            {"Bayern", "Berlin", "Nordrhein-Westfalen"},
+            self.ALL_STATES,
         )
+        self.assertEqual(len(payload["regional_performance"]), 16)
+        self.assertTrue(all(
+            0 <= row["regional_on_time_percentage"] <= 100
+            and 0 <= row["suburban_on_time_percentage"] <= 100
+            for row in payload["regional_performance"]
+        ))
+
+    async def test_vehicle_mock_contract_accepts_line_name(self):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app), base_url="http://test"
+        ) as client:
+            first = await client.get("/analytics/vehicle/ICE%20592")
+            repeated = await client.get("/analytics/vehicle/ICE%20592")
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json(), repeated.json())
+        payload = first.json()
+        self.assertEqual(payload["line_id"], "ICE 592")
+        self.assertEqual(payload["period_days"], 7)
+        self.assertIs(payload["is_mock"], True)
+        self.assertTrue(0 <= payload["on_time_probability"] <= 1)
+        self.assertGreaterEqual(payload["average_delay_minutes"], 0)
 
 
 class NormalizationTests(unittest.TestCase):

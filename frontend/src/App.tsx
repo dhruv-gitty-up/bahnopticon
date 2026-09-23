@@ -230,18 +230,20 @@ function App() {
             <p className="empty-message">{vehicles.length ? 'No vehicles match these filters.' : 'Waiting for vehicles in the feed.'}</p>
           )}
         </section>
-        {activePanel === 'vehicle' && selectedVehicle && (
-          <VehicleDetailsPanel
-            key={selectedVehicle.id}
-            vehicle={selectedVehicle}
-            feedLive={status === 'connected'}
-            onClose={closePanel}
-          />
-        )}
         {activePanel === 'station' && selectedStation && (
           <StationDeparturePanel key={selectedStation.id} station={selectedStation} onClose={closePanel} />
         )}
-        <AnalyticsSidebar selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} />
+        <div className={`right-panel-stack${activePanel === 'vehicle' ? ' right-panel-stack--vehicle-active' : ''}`}>
+          <AnalyticsSidebar selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} />
+          {activePanel === 'vehicle' && selectedVehicle && (
+            <VehicleDetailsPanel
+              key={selectedVehicle.id}
+              vehicle={selectedVehicle}
+              feedLive={status === 'connected'}
+              onClose={closePanel}
+            />
+          )}
+        </div>
       </div>
       <TransitLegend />
     </main>

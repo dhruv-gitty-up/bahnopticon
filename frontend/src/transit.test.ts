@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseDepartures } from './departures.ts';
-import { parseSevenDayAnalytics } from './analytics.ts';
+import { parseSevenDayAnalytics, parseVehicleAnalytics } from './analytics.ts';
 import { createTimedTrip, findVehicleById, getSnapshotTimestamp, getVehiclePosition, measureRoute, parseBorderCollection, parseJourneyFeature, parseStationCollection, parseVehicleSnapshot, reconcileVehicleSlots, sampleRoute } from './transit.ts';
 import type { VehicleSlots } from './transit.ts';
 import { formatDateTime, formatTime } from './transitPresentation.ts';
@@ -137,6 +137,17 @@ test('normalizes the seven-day analytics dashboard contract', () => {
   assert.equal(analytics.networkPerformance[0].onTimeProbability, 0.78);
   assert.equal(analytics.regionalPerformance[0].bundesland, 'Berlin');
   assert.equal(analytics.isMock, true);
+});
+
+test('normalizes train-specific analytics and rejects malformed history', () => {
+  const analytics = parseVehicleAnalytics({
+    line_id: 'ICE 592', period_days: 7, is_mock: true,
+    on_time_probability: 0.78, average_delay_minutes: 3.3,
+  });
+  assert.equal(analytics.lineId, 'ICE 592');
+  assert.equal(analytics.onTimeProbability, 0.78);
+  assert.equal(analytics.averageDelayMinutes, 3.3);
+  assert.throws(() => parseVehicleAnalytics({ line_id: 'ICE 592', on_time_probability: null }));
 });
 
 test('accepts the live departure contract and keeps expected time and delay', () => {

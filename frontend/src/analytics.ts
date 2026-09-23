@@ -18,6 +18,14 @@ export interface SevenDayAnalytics {
   regionalPerformance: RegionalPerformance[];
 }
 
+export interface VehicleAnalytics {
+  lineId: string;
+  periodDays: number;
+  isMock: boolean;
+  onTimeProbability: number;
+  averageDelayMinutes: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -53,5 +61,20 @@ export function parseSevenDayAnalytics(value: unknown): SevenDayAnalytics {
     isMock: value.is_mock === true,
     networkPerformance,
     regionalPerformance,
+  };
+}
+
+export function parseVehicleAnalytics(value: unknown): VehicleAnalytics {
+  if (!isRecord(value) || typeof value.line_id !== 'string' || !value.line_id
+    || typeof value.on_time_probability !== 'number' || !Number.isFinite(value.on_time_probability)
+    || typeof value.average_delay_minutes !== 'number' || !Number.isFinite(value.average_delay_minutes)) {
+    throw new Error('Invalid vehicle analytics response');
+  }
+  return {
+    lineId: value.line_id,
+    periodDays: typeof value.period_days === 'number' ? value.period_days : 7,
+    isMock: value.is_mock === true,
+    onTimeProbability: Math.max(0, Math.min(1, value.on_time_probability)),
+    averageDelayMinutes: Math.max(0, value.average_delay_minutes),
   };
 }

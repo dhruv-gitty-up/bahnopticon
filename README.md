@@ -138,7 +138,11 @@ Returns a JSON object such as `{"status":"ok","upstream":"live","last_success":1
 
 ### `GET /analytics/7day`
 
-Returns a stable mock analytics contract for dashboard development. `network_performance` contains seven-day on-time probability and average delay for ICE, Regional, and S-Bahn. `regional_performance` contains Regional and S-Bahn on-time percentages for Bayern, Berlin, and Nordrhein-Westfalen. The payload includes `is_mock: true`; it is not derived from historical telemetry yet.
+Returns a stable mock analytics contract for dashboard development. `network_performance` contains seven-day on-time probability and average delay for ICE, Regional, and S-Bahn. `regional_performance` contains Regional and S-Bahn on-time percentages for all 16 German Bundesländer. The payload includes `is_mock: true`; it is not derived from historical telemetry yet.
+
+### `GET /analytics/vehicle/{line_id}`
+
+Returns deterministic mock seven-day history for a URL-encoded line name such as `ICE%20592`. The response includes the normalized `line_id`, `period_days`, `is_mock`, `on_time_probability` as a value from 0 to 1, and `average_delay_minutes`. Identical line names receive identical mock values so the frontend remains stable until this endpoint is replaced by Supabase historical aggregation.
 
 ### `GET /geometry`
 

@@ -58,12 +58,38 @@ ANALYTICS_7DAY = {
          "on_time_probability": 0.88, "average_delay_minutes": 4.1},
     ],
     "regional_performance": [
+        {"bundesland": "Baden-Württemberg", "regional_on_time_percentage": 76.9,
+         "suburban_on_time_percentage": 87.3},
         {"bundesland": "Bayern", "regional_on_time_percentage": 78.4,
          "suburban_on_time_percentage": 86.9},
         {"bundesland": "Berlin", "regional_on_time_percentage": 74.2,
          "suburban_on_time_percentage": 89.1},
+        {"bundesland": "Brandenburg", "regional_on_time_percentage": 77.6,
+         "suburban_on_time_percentage": 88.2},
+        {"bundesland": "Bremen", "regional_on_time_percentage": 79.1,
+         "suburban_on_time_percentage": 86.1},
+        {"bundesland": "Hamburg", "regional_on_time_percentage": 80.3,
+         "suburban_on_time_percentage": 90.2},
+        {"bundesland": "Hessen", "regional_on_time_percentage": 75.7,
+         "suburban_on_time_percentage": 85.8},
+        {"bundesland": "Mecklenburg-Vorpommern", "regional_on_time_percentage": 81.2,
+         "suburban_on_time_percentage": 87.6},
+        {"bundesland": "Niedersachsen", "regional_on_time_percentage": 77.1,
+         "suburban_on_time_percentage": 85.4},
         {"bundesland": "Nordrhein-Westfalen", "regional_on_time_percentage": 72.8,
          "suburban_on_time_percentage": 84.6},
+        {"bundesland": "Rheinland-Pfalz", "regional_on_time_percentage": 79.4,
+         "suburban_on_time_percentage": 86.5},
+        {"bundesland": "Saarland", "regional_on_time_percentage": 80.7,
+         "suburban_on_time_percentage": 88.0},
+        {"bundesland": "Sachsen", "regional_on_time_percentage": 78.8,
+         "suburban_on_time_percentage": 87.1},
+        {"bundesland": "Sachsen-Anhalt", "regional_on_time_percentage": 80.1,
+         "suburban_on_time_percentage": 86.7},
+        {"bundesland": "Schleswig-Holstein", "regional_on_time_percentage": 76.4,
+         "suburban_on_time_percentage": 88.6},
+        {"bundesland": "Thüringen", "regional_on_time_percentage": 81.0,
+         "suburban_on_time_percentage": 85.9},
     ],
 }
 TRACKS_UNAVAILABLE_DETAIL = (
@@ -537,6 +563,25 @@ async def health():
 async def analytics_7day():
     """Return a stable mock contract while historical aggregation is built."""
     return ANALYTICS_7DAY
+
+
+@app.get("/analytics/vehicle/{line_id}")
+async def vehicle_analytics(line_id: str):
+    """Return stable mock seven-day performance for one decoded line name."""
+    normalized_line = " ".join(line_id.split())
+    if not normalized_line:
+        raise HTTPException(status_code=400, detail="Line name is required")
+    # Keep mock results stable across processes so frontend development and
+    # screenshots do not change until this is replaced by historical SQL.
+    seed = sum((index + 1) * ord(character)
+               for index, character in enumerate(normalized_line))
+    return {
+        "line_id": normalized_line,
+        "period_days": 7,
+        "is_mock": True,
+        "on_time_probability": round(0.70 + (seed % 21) / 100, 2),
+        "average_delay_minutes": round(3.0 + ((seed * 17) % 91) / 10, 1),
+    }
 
 
 @app.get("/geometry")

@@ -18,8 +18,7 @@
   position: absolute;
   z-index: 20;
   inset: 0;
-  padding: 20px;
-  padding-bottom: 44px;
+  padding: 20px 16px 16px 20px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -133,6 +132,21 @@ dd { margin: 0; text-align: right; }
 
 .eyebrow { color: #a8c1d8; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .detail-panel { width: min(410px, 42vw); max-height: calc(100dvh - 64px); }
+.right-panel-stack {
+  width: min(410px, 42vw);
+  height: 100%;
+  margin-left: auto;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 16px;
+  pointer-events: none;
+}
+.right-panel-stack > * { pointer-events: auto; }
+.right-panel-stack .vehicle-details { margin-top: auto; }
+.right-panel-stack--vehicle-active .analytics-sidebar { max-height: min(48%, 430px); }
+.right-panel-stack--vehicle-active .vehicle-details { max-height: calc(52% - 16px); }
 .detail-panel h2 { font-size: 23px; line-height: 1.2; margin-top: 4px; overflow-wrap: anywhere; }
 .detail-panel .panel-heading { align-items: flex-start; }
 .detail-panel .destination { font-size: 16px; }
@@ -177,7 +191,21 @@ dd { margin: 0; text-align: right; }
 .region-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid #ffffff18; }
 .region-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .region-heading > span:last-child { color: #94a3b8; font-size: 9px; }
-.region-list { display: grid; gap: 7px; margin-top: 10px; }
+.region-list {
+  display: grid;
+  gap: 7px;
+  max-height: 256px;
+  margin-top: 10px;
+  padding-right: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(148, 163, 184, 0.55) rgba(255, 255, 255, 0.04);
+  scrollbar-width: thin;
+}
+.region-list::-webkit-scrollbar { width: 6px; }
+.region-list::-webkit-scrollbar-track { border-radius: 999px; background: rgba(255, 255, 255, 0.04); }
+.region-list::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(148, 163, 184, 0.55); }
+.region-list::-webkit-scrollbar-thumb:hover { background: rgba(203, 213, 225, 0.75); }
 .region-kpi { display: grid; grid-template-columns: minmax(105px, 1fr) 72px 72px; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; color: #cbd5e1; text-align: left; border: 1px solid #ffffff12; border-radius: 9px; background: #ffffff06; }
 .region-kpi:hover { background: #ffffff0d; border-color: #ffffff25; }
 .region-kpi[aria-pressed='true'] { color: #fff; border-color: #f8fafc80; background: #f8fafc14; box-shadow: 0 0 22px rgba(255, 255, 255, 0.12); }
@@ -259,6 +287,7 @@ dd { margin: 0; text-align: right; }
 
 @media (max-width: 767px) {
   .dashboard-overlay { padding: 0; display: block; }
+  .right-panel-stack { display: contents; }
   .island { padding: 16px; }
   .mobile-menu-button {
     position: absolute;
@@ -328,6 +357,7 @@ dd { margin: 0; text-align: right; }
 
 @media (min-width: 768px) and (max-width: 1180px) {
   .dashboard-overlay--panel-active .analytics-sidebar { display: none; }
+  .right-panel-stack--vehicle-active .vehicle-details { max-height: 100%; }
 }
 
 @media (max-height: 520px) and (min-width: 768px) {

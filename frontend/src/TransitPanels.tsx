@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Ref } from 'react';
 import { apiUrl } from './api';
-import type { NetworkPerformance } from './analytics';
-import { loadSevenDayAnalytics } from './analyticsClient';
+import type { VehicleAnalytics } from './analytics';
+import { loadVehicleAnalytics } from './analyticsClient';
 import { parseDepartures } from './departures';
 import type { Departure } from './departures';
 import type { StationFeature, VehicleFeature } from './transit';
@@ -47,26 +47,27 @@ export function VehicleDetailsPanel({ vehicle, feedLive, onClose }: {
   onClose: () => void;
 }) {
   const { properties } = vehicle;
-  const [trend, setTrend] = useState<NetworkPerformance | null>(null);
-  const [trendLoading, setTrendLoading] = useState(true);
-  const analyticsProduct = properties.type === 'national' ? 'nationalExpress' : properties.type;
+  const [trendResult, setTrendResult] = useState<{
+    lineId: string;
+    trend: VehicleAnalytics | null;
+  } | null>(null);
+  const trend = trendResult?.lineId === properties.line ? trendResult.trend : null;
+  const trendLoading = trendResult?.lineId !== properties.line;
   const scheduled = properties.nextStationScheduledTime ?? properties.scheduledTime;
   const expected = properties.nextStationExpectedTime ?? properties.expectedTime;
   const nextDelay = properties.nextStationDelay ?? properties.delay;
 
   useEffect(() => {
-    let active = true;
-    loadSevenDayAnalytics().then(payload => {
-      if (!active) return;
-      setTrend(payload.networkPerformance.find(row => row.product === analyticsProduct) ?? null);
-      setTrendLoading(false);
+    const controller = new AbortController();
+    loadVehicleAnalytics(properties.line, controller.signal).then(payload => {
+      if (controller.signal.aborted) return;
+      setTrendResult({ lineId: properties.line, trend: payload });
     }).catch(() => {
-      if (!active) return;
-      setTrend(null);
-      setTrendLoading(false);
+      if (controller.signal.aborted) return;
+      setTrendResult({ lineId: properties.line, trend: null });
     });
-    return () => { active = false; };
-  }, [analyticsProduct]);
+    return () => controller.abort();
+  }, [properties.line]);
 
   return (
     <section className="island detail-panel vehicle-details" aria-label="Selected vehicle details">
@@ -95,13 +96,13 @@ export function VehicleDetailsPanel({ vehicle, feedLive, onClose }: {
         <div><dt>Expected</dt><dd>{formatDateTime(properties.expectedTime)}</dd></div>
       </dl>
       <div className="trend-card" aria-live="polite">
-        <p className="eyebrow">7-Day History</p>
+        <p className="eyebrow">7-Day Train History</p>
         {trendLoading ? (
-          <p className="trend-value">Loading network trend…</p>
+          <p className="trend-value">Loading train history…</p>
         ) : trend ? (
           <>
             <p className="trend-value">{Math.round(trend.onTimeProbability * 100)}% On-Time</p>
-            <p className="trend-meta">Average delay {compactNumber.format(trend.averageDelayMinutes)} min</p>
+            <p className="trend-meta">{trend.lineId} · Average delay {compactNumber.format(trend.averageDelayMinutes)} min</p>
           </>
         ) : (
           <p className="trend-value">History unavailable</p>
