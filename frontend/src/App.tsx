@@ -233,17 +233,15 @@ function App() {
         {activePanel === 'station' && selectedStation && (
           <StationDeparturePanel key={selectedStation.id} station={selectedStation} onClose={closePanel} />
         )}
-        <div className={`right-panel-stack${activePanel === 'vehicle' ? ' right-panel-stack--vehicle-active' : ''}`}>
-          <AnalyticsSidebar selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} />
-          {activePanel === 'vehicle' && selectedVehicle && (
-            <VehicleDetailsPanel
-              key={selectedVehicle.id}
-              vehicle={selectedVehicle}
-              feedLive={status === 'connected'}
-              onClose={closePanel}
-            />
-          )}
-        </div>
+        <AnalyticsSidebar selectedRegion={selectedRegion} onSelectRegion={setSelectedRegion} />
+        {activePanel === 'vehicle' && selectedVehicle && (
+          <VehicleDetailsPanel
+            key={selectedVehicle.id}
+            vehicle={selectedVehicle}
+            feedLive={status === 'connected'}
+            onClose={closePanel}
+          />
+        )}
       </div>
       <TransitLegend />
     </main>

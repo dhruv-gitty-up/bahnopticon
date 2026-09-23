@@ -132,21 +132,13 @@ dd { margin: 0; text-align: right; }
 
 .eyebrow { color: #a8c1d8; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .detail-panel { width: min(410px, 42vw); max-height: calc(100dvh - 64px); }
-.right-panel-stack {
-  width: min(410px, 42vw);
-  height: 100%;
-  margin-left: auto;
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 16px;
-  pointer-events: none;
+.vehicle-details {
+  position: absolute;
+  z-index: 50;
+  right: 24px;
+  bottom: 24px;
+  max-height: calc(50dvh - 32px);
 }
-.right-panel-stack > * { pointer-events: auto; }
-.right-panel-stack .vehicle-details { margin-top: auto; }
-.right-panel-stack--vehicle-active .analytics-sidebar { max-height: min(48%, 430px); }
-.right-panel-stack--vehicle-active .vehicle-details { max-height: calc(52% - 16px); }
 .detail-panel h2 { font-size: 23px; line-height: 1.2; margin-top: 4px; overflow-wrap: anywhere; }
 .detail-panel .panel-heading { align-items: flex-start; }
 .detail-panel .destination { font-size: 16px; }
@@ -174,7 +166,15 @@ dd { margin: 0; text-align: right; }
 .trend-value { margin-top: 7px; color: #f8fafc; font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
 .trend-meta { margin-top: 4px; color: #a8b9cb; font-size: 11px; }
 
-.analytics-sidebar { width: 330px; max-height: calc(100dvh - 64px); }
+.analytics-sidebar {
+  position: absolute;
+  z-index: 40;
+  top: 24px;
+  right: 24px;
+  width: 330px;
+  max-height: calc(100dvh - 48px);
+}
+.dashboard-overlay--panel-active .analytics-sidebar { max-height: calc(50dvh - 32px); }
 .analytics-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .analytics-heading h2 { margin-top: 5px; font-size: 19px; letter-spacing: -0.03em; }
 .mock-badge { padding: 4px 7px; border: 1px solid #fbbf2450; border-radius: 999px; color: #fde68a; background: #f59e0b18; font-size: 9px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -287,7 +287,6 @@ dd { margin: 0; text-align: right; }
 
 @media (max-width: 767px) {
   .dashboard-overlay { padding: 0; display: block; }
-  .right-panel-stack { display: contents; }
   .island { padding: 16px; }
   .mobile-menu-button {
     position: absolute;
@@ -349,15 +348,11 @@ dd { margin: 0; text-align: right; }
     max-height: min(72dvh, 660px);
     border-radius: 22px 22px 14px 14px;
   }
+  .vehicle-details { max-height: min(72dvh, 660px); }
   .station-details { width: auto; }
   .analytics-sidebar { display: none; }
   .transit-legend { top: max(12px, env(safe-area-inset-top)); right: 12px; bottom: auto; left: auto; padding: 9px 11px; }
   .transit-legend ul { gap: 5px 11px; }
-}
-
-@media (min-width: 768px) and (max-width: 1180px) {
-  .dashboard-overlay--panel-active .analytics-sidebar { display: none; }
-  .right-panel-stack--vehicle-active .vehicle-details { max-height: 100%; }
 }
 
 @media (max-height: 520px) and (min-width: 768px) {
